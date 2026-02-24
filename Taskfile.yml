@@ -109,7 +109,7 @@ tasks:
 
   # --- Release & Distribution ---
   release:
-    desc: "Bump patch, commit, tag, and push"
+    desc: "Bump patch, commit, tag, and push to trigger release workflow"
     cmds:
       - task: version:patch
       - |
@@ -119,10 +119,10 @@ tasks:
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
-        echo "Pushed v$VERSION"
+        echo "Pushed v$VERSION — release workflow triggered"
 
   release:minor:
-    desc: "Bump minor, commit, tag, and push"
+    desc: "Bump minor, commit, tag, and push to trigger release workflow"
     cmds:
       - task: version:minor
       - |
@@ -132,10 +132,10 @@ tasks:
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
-        echo "Pushed v$VERSION"
+        echo "Pushed v$VERSION — release workflow triggered"
 
   release:major:
-    desc: "Bump major, commit, tag, and push"
+    desc: "Bump major, commit, tag, and push to trigger release workflow"
     cmds:
       - task: version:major
       - |
@@ -145,7 +145,7 @@ tasks:
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
-        echo "Pushed v$VERSION"
+        echo "Pushed v$VERSION — release workflow triggered"
 
   # --- Code Quality ---
   loc:
