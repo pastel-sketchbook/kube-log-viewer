@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, InputMode};
+use crate::app::{App, InputMode, TimestampMode};
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme();
@@ -27,6 +27,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             let follow_label = if app.follow_mode { active } else { label };
             let wide_label = if app.wide_logs { active } else { label };
             let json_label = if app.json_mode { active } else { label };
+            let ts_label = if app.timestamp_mode != TimestampMode::Utc {
+                active
+            } else {
+                label
+            };
 
             Line::from(vec![
                 Span::styled(" ↑↓", key),
@@ -49,6 +54,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" wide  ", wide_label),
                 Span::styled("J", key),
                 Span::styled(" json  ", json_label),
+                Span::styled("T", key),
+                Span::styled(format!(" {}  ", app.timestamp_mode.label()), ts_label),
                 Span::styled("t", key),
                 Span::styled(" theme  ", label),
                 Span::styled("?", key),

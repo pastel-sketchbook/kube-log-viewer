@@ -36,6 +36,32 @@ pub enum InputMode {
     Search,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimestampMode {
+    Utc,
+    #[default]
+    Local,
+    Relative,
+}
+
+impl TimestampMode {
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Utc => Self::Local,
+            Self::Local => Self::Relative,
+            Self::Relative => Self::Utc,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Utc => "UTC",
+            Self::Local => "Local",
+            Self::Relative => "Relative",
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -56,6 +82,7 @@ pub struct App {
     pub wrap_lines: bool,
     pub wide_logs: bool,
     pub json_mode: bool,
+    pub timestamp_mode: TimestampMode,
     pub input_mode: InputMode,
     pub search_query: String,
     pub show_help: bool,
@@ -102,6 +129,7 @@ impl App {
             wrap_lines: false,
             wide_logs: false,
             json_mode: true,
+            timestamp_mode: TimestampMode::default(),
             input_mode: InputMode::Normal,
             search_query: String::new(),
             show_help: false,
@@ -203,6 +231,7 @@ impl App {
             KeyCode::Char('w') => self.wide_logs = !self.wide_logs,
             KeyCode::Char('W') => self.wrap_lines = !self.wrap_lines,
             KeyCode::Char('J') => self.json_mode = !self.json_mode,
+            KeyCode::Char('T') => self.timestamp_mode = self.timestamp_mode.cycle(),
             KeyCode::Char('t') => self.cycle_theme(),
             KeyCode::Tab => {
                 self.focus = match self.focus {
@@ -818,6 +847,25 @@ mod tests {
         assert!(!app.json_mode);
         app.handle_key(key(KeyCode::Char('J')));
         assert!(app.json_mode);
+    }
+
+    #[test]
+    fn test_shift_t_cycles_timestamp_mode() {
+        let mut app = test_app();
+        assert_eq!(app.timestamp_mode, TimestampMode::Local); // default
+        app.handle_key(key(KeyCode::Char('T')));
+        assert_eq!(app.timestamp_mode, TimestampMode::Relative);
+        app.handle_key(key(KeyCode::Char('T')));
+        assert_eq!(app.timestamp_mode, TimestampMode::Utc);
+        app.handle_key(key(KeyCode::Char('T')));
+        assert_eq!(app.timestamp_mode, TimestampMode::Local);
+    }
+
+    #[test]
+    fn test_timestamp_mode_label() {
+        assert_eq!(TimestampMode::Utc.label(), "UTC");
+        assert_eq!(TimestampMode::Local.label(), "Local");
+        assert_eq!(TimestampMode::Relative.label(), "Relative");
     }
 
     // -- Search mode --------------------------------------------------------

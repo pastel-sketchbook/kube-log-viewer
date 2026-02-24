@@ -59,13 +59,23 @@ Implementation roadmap organized in phases. Each phase builds on the previous.
 - [x] `cargo test` passes clean
 - [x] Error handling audit: no `unwrap()` in non-test code
 - [x] Terminal restoration audit: ensure cleanup on panic (catch_unwind or panic hook)
-- [ ] README: add screenshot / demo GIF
 
 ## Future (Post v0.1)
 
+- [x] Inline error display with `[ERROR]` prefix in log lines
+- [x] Automatic `az login` on Azure auth errors
+- [x] Theme system with 16 palettes and `t` cycle key
+- [x] Wide log view toggle (`w`)
+- [x] Zebra striping on log lines
+- [x] Timestamp detection and muted color rendering
+- [x] JSON log flattening with `J` toggle (default on)
+- [x] Toggle status indication via accent-highlighted statusbar labels
+- [x] CI/CD: GitHub Actions for clippy/test/build (macOS + Ubuntu)
+- [x] CI/CD: Multi-arch release workflow (4 targets, GitHub Release)
+- [ ] README: add screenshot / demo GIF
 - [ ] Regex search mode (toggle between substring and regex)
 - [ ] Pod auto-refresh via `kube::runtime::watcher`
 - [ ] Log export to file
-- [ ] Custom color themes / config file
-- [ ] Timestamp parsing and relative time display
+- [ ] Config file for themes / keybindings
+- [ ] Relative time display for timestamps
 - [ ] Multiple simultaneous log streams (split pane)

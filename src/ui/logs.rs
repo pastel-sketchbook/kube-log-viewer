@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
+use chrono::{DateTime, Local, NaiveDateTime, Utc};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::app::{App, Focus, InputMode};
+use crate::app::{App, Focus, InputMode, TimestampMode};
 use crate::ui::theme::Theme;
 
 /// Matches ISO 8601 / RFC 3339 timestamps at the start of a log line.
@@ -158,7 +159,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             let mut styled = if !app.search_query.is_empty() {
                 highlight_search(s, &app.search_query, theme)
             } else {
-                Line::from(colorize_log_line(s, theme))
+                Line::from(colorize_log_line(s, theme, app.timestamp_mode))
             };
             if i % 2 == 1 {
                 styled = styled.style(Style::default().bg(theme.zebra_bg));
@@ -204,7 +205,59 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(input, input_area);
 }
 
-fn colorize_log_line<'a>(line: &'a str, theme: &Theme) -> Vec<Span<'a>> {
+// ---------------------------------------------------------------------------
+// Timestamp display helpers
+// ---------------------------------------------------------------------------
+
+/// Try to parse a timestamp string into a `DateTime<Utc>`.
+/// Handles RFC 3339 (with timezone) and `YYYY-MM-DD HH:MM:SS` (assumed UTC).
+fn parse_log_timestamp(ts: &str) -> Option<DateTime<Utc>> {
+    let trimmed = ts.trim();
+    // Try RFC 3339 first (covers `2026-02-24T16:36:51.600Z`, `...+05:30`)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
+        return Some(dt.to_utc());
+    }
+    // Fall back to space-separated `YYYY-MM-DD HH:MM:SS` (assume UTC)
+    if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
+        return Some(naive.and_utc());
+    }
+    None
+}
+
+/// Format a UTC timestamp as local time.
+fn format_local(dt: DateTime<Utc>) -> String {
+    let local: DateTime<Local> = dt.into();
+    format!("{} ", local.format("%Y-%m-%d %H:%M:%S"))
+}
+
+/// Format a duration as a compact relative string.
+fn format_relative(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let secs = now.signed_duration_since(dt).num_seconds().max(0);
+    match secs {
+        s if s < 60 => format!("{s}s ago "),
+        s if s < 3600 => format!("{}m ago ", s / 60),
+        s if s < 86400 => format!("{}h ago ", s / 3600),
+        s => format!("{}d ago ", s / 86400),
+    }
+}
+
+/// Convert a matched timestamp string according to the display mode.
+/// Returns `None` if the timestamp cannot be parsed (caller keeps original).
+fn convert_timestamp(ts: &str, mode: TimestampMode) -> Option<String> {
+    match mode {
+        TimestampMode::Utc => None, // keep original
+        TimestampMode::Local => parse_log_timestamp(ts).map(format_local),
+        TimestampMode::Relative => {
+            parse_log_timestamp(ts).map(|dt| format_relative(dt, Utc::now()))
+        }
+    }
+}
+
+fn colorize_log_line<'a>(
+    line: &'a str,
+    theme: &Theme,
+    timestamp_mode: TimestampMode,
+) -> Vec<Span<'a>> {
     let level_color = if line.contains("ERROR") || line.contains("error") {
         Some(theme.log_error)
     } else if line.contains("WARN") || line.contains("warn") {
@@ -218,7 +271,10 @@ fn colorize_log_line<'a>(line: &'a str, theme: &Theme) -> Vec<Span<'a>> {
     if let Some(m) = TIMESTAMP_RE.find(line) {
         let ts = &line[..m.end()];
         let rest = &line[m.end()..];
-        let ts_span = Span::styled(ts, Style::default().fg(theme.muted));
+        let ts_span = match convert_timestamp(ts, timestamp_mode) {
+            Some(converted) => Span::styled(converted, Style::default().fg(theme.muted)),
+            None => Span::styled(ts, Style::default().fg(theme.muted)),
+        };
         let rest_span = match level_color {
             Some(color) => Span::styled(rest, Style::default().fg(color)),
             None => Span::raw(rest),
@@ -264,12 +320,17 @@ fn highlight_search<'a>(line: &'a str, query: &str, theme: &Theme) -> Line<'a> {
 mod tests {
     use super::*;
     use crate::ui::theme::DARK;
+    use chrono::Timelike;
 
     // -- colorize_log_line --------------------------------------------------
 
     #[test]
     fn test_colorize_error_line_with_timestamp() {
-        let spans = colorize_log_line("2024-01-01 10:00:00 ERROR something broke", &DARK);
+        let spans = colorize_log_line(
+            "2024-01-01 10:00:00 ERROR something broke",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 2);
         // Timestamp in muted
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
@@ -280,7 +341,11 @@ mod tests {
 
     #[test]
     fn test_colorize_warn_line_with_timestamp() {
-        let spans = colorize_log_line("2024-01-01 10:00:00 WARN low memory", &DARK);
+        let spans = colorize_log_line(
+            "2024-01-01 10:00:00 WARN low memory",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
         assert_eq!(spans[1].style.fg, Some(DARK.log_warn));
@@ -288,28 +353,36 @@ mod tests {
 
     #[test]
     fn test_colorize_debug_line_no_timestamp() {
-        let spans = colorize_log_line("DEBUG: detailed trace info", &DARK);
+        let spans = colorize_log_line("DEBUG: detailed trace info", &DARK, TimestampMode::Utc);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(DARK.log_debug));
     }
 
     #[test]
     fn test_colorize_info_line_no_timestamp() {
-        let spans = colorize_log_line("INFO: server started on port 8080", &DARK);
+        let spans = colorize_log_line(
+            "INFO: server started on port 8080",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, None);
     }
 
     #[test]
     fn test_colorize_lowercase_error_no_timestamp() {
-        let spans = colorize_log_line("an error occurred in module", &DARK);
+        let spans = colorize_log_line("an error occurred in module", &DARK, TimestampMode::Utc);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(DARK.log_error));
     }
 
     #[test]
     fn test_timestamp_rfc3339_z() {
-        let spans = colorize_log_line("2024-01-15T10:00:00Z INFO started", &DARK);
+        let spans = colorize_log_line(
+            "2024-01-15T10:00:00Z INFO started",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15T10:00:00Z ");
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
@@ -319,7 +392,11 @@ mod tests {
 
     #[test]
     fn test_timestamp_rfc3339_fractional() {
-        let spans = colorize_log_line("2024-01-15T10:00:00.123456789Z ERROR fail", &DARK);
+        let spans = colorize_log_line(
+            "2024-01-15T10:00:00.123456789Z ERROR fail",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15T10:00:00.123456789Z ");
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
@@ -328,7 +405,11 @@ mod tests {
 
     #[test]
     fn test_timestamp_space_separated() {
-        let spans = colorize_log_line("2024-01-15 10:00:00 request handled", &DARK);
+        let spans = colorize_log_line(
+            "2024-01-15 10:00:00 request handled",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15 10:00:00 ");
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
@@ -336,7 +417,11 @@ mod tests {
 
     #[test]
     fn test_timestamp_with_offset() {
-        let spans = colorize_log_line("2024-01-15T10:00:00+05:30 WARN slow", &DARK);
+        let spans = colorize_log_line(
+            "2024-01-15T10:00:00+05:30 WARN slow",
+            &DARK,
+            TimestampMode::Utc,
+        );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15T10:00:00+05:30 ");
         assert_eq!(spans[0].style.fg, Some(DARK.muted));
@@ -345,7 +430,7 @@ mod tests {
 
     #[test]
     fn test_no_timestamp_line() {
-        let spans = colorize_log_line("[ERROR] connection refused", &DARK);
+        let spans = colorize_log_line("[ERROR] connection refused", &DARK, TimestampMode::Utc);
         // No timestamp detected, entire line styled as error
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(DARK.log_error));
@@ -516,9 +601,148 @@ mod tests {
         // Verify the flattened output contains ERROR keyword for colorize_log_line
         let line = r#"{"level":"error","msg":"fail"}"#;
         let result = format_json_line(line);
-        let spans = colorize_log_line(result.as_ref(), &DARK);
+        let spans = colorize_log_line(result.as_ref(), &DARK, TimestampMode::Utc);
         // Should detect ERROR and color it
         let has_error_color = spans.iter().any(|s| s.style.fg == Some(DARK.log_error));
         assert!(has_error_color);
+    }
+
+    // -- parse_log_timestamp ------------------------------------------------
+
+    #[test]
+    fn test_parse_rfc3339_z() {
+        let dt = parse_log_timestamp("2026-02-24T16:36:51Z").unwrap();
+        assert_eq!(dt.timestamp(), 1771951011);
+    }
+
+    #[test]
+    fn test_parse_rfc3339_fractional() {
+        let dt = parse_log_timestamp("2026-02-24T16:36:51.600Z").unwrap();
+        assert_eq!(dt.timestamp(), 1771951011);
+    }
+
+    #[test]
+    fn test_parse_rfc3339_offset() {
+        let dt = parse_log_timestamp("2026-02-24T16:36:51+05:30").unwrap();
+        // 16:36:51 +05:30 = 11:06:51 UTC
+        assert_eq!(dt.hour(), 11);
+    }
+
+    #[test]
+    fn test_parse_space_separated() {
+        let dt = parse_log_timestamp("2026-02-24 16:36:51").unwrap();
+        assert_eq!(dt.timestamp(), 1771951011);
+    }
+
+    #[test]
+    fn test_parse_invalid_returns_none() {
+        assert!(parse_log_timestamp("not-a-timestamp").is_none());
+        assert!(parse_log_timestamp("").is_none());
+    }
+
+    // -- format_local -------------------------------------------------------
+
+    #[test]
+    fn test_format_local_contains_date() {
+        let dt = parse_log_timestamp("2026-02-24T16:36:51Z").unwrap();
+        let result = format_local(dt);
+        // Must contain the date in some local representation
+        assert!(result.contains("2026-02-24") || result.contains("2026-02-25"));
+        assert!(result.ends_with(' '));
+    }
+
+    // -- format_relative ----------------------------------------------------
+
+    #[test]
+    fn test_format_relative_seconds() {
+        let now = Utc::now();
+        let dt = now - chrono::Duration::seconds(30);
+        let result = format_relative(dt, now);
+        assert_eq!(result, "30s ago ");
+    }
+
+    #[test]
+    fn test_format_relative_minutes() {
+        let now = Utc::now();
+        let dt = now - chrono::Duration::seconds(300);
+        let result = format_relative(dt, now);
+        assert_eq!(result, "5m ago ");
+    }
+
+    #[test]
+    fn test_format_relative_hours() {
+        let now = Utc::now();
+        let dt = now - chrono::Duration::seconds(7200);
+        let result = format_relative(dt, now);
+        assert_eq!(result, "2h ago ");
+    }
+
+    #[test]
+    fn test_format_relative_days() {
+        let now = Utc::now();
+        let dt = now - chrono::Duration::seconds(172800);
+        let result = format_relative(dt, now);
+        assert_eq!(result, "2d ago ");
+    }
+
+    // -- convert_timestamp --------------------------------------------------
+
+    #[test]
+    fn test_convert_timestamp_utc_returns_none() {
+        assert!(convert_timestamp("2026-02-24T16:36:51Z", TimestampMode::Utc).is_none());
+    }
+
+    #[test]
+    fn test_convert_timestamp_local_returns_some() {
+        let result = convert_timestamp("2026-02-24T16:36:51Z", TimestampMode::Local);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("2026-02-2"));
+    }
+
+    #[test]
+    fn test_convert_timestamp_relative_returns_some() {
+        let result = convert_timestamp("2026-02-24T16:36:51Z", TimestampMode::Relative);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("ago"));
+    }
+
+    #[test]
+    fn test_convert_timestamp_invalid_returns_none() {
+        assert!(convert_timestamp("not-a-ts", TimestampMode::Local).is_none());
+        assert!(convert_timestamp("not-a-ts", TimestampMode::Relative).is_none());
+    }
+
+    // -- colorize_log_line with timestamp modes -----------------------------
+
+    #[test]
+    fn test_colorize_local_mode_converts_timestamp() {
+        let spans = colorize_log_line(
+            "2026-02-24T16:36:51Z ERROR fail",
+            &DARK,
+            TimestampMode::Local,
+        );
+        assert_eq!(spans.len(), 2);
+        // Timestamp should be converted (owned String, not the original)
+        assert!(spans[0].content.contains("2026-02-2"));
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+    }
+
+    #[test]
+    fn test_colorize_relative_mode_converts_timestamp() {
+        let spans = colorize_log_line(
+            "2026-02-24T16:36:51Z ERROR fail",
+            &DARK,
+            TimestampMode::Relative,
+        );
+        assert_eq!(spans.len(), 2);
+        assert!(spans[0].content.contains("ago"));
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+    }
+
+    #[test]
+    fn test_colorize_utc_mode_keeps_original() {
+        let spans = colorize_log_line("2026-02-24T16:36:51Z ERROR fail", &DARK, TimestampMode::Utc);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "2026-02-24T16:36:51Z ");
     }
 }

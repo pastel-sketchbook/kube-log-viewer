@@ -78,6 +78,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         "    w          Toggle wide log view",
         "    W          Toggle line wrap",
         "    J          Toggle JSON formatting",
+        "    T          Cycle timestamp (UTC/Local/Relative)",
         "    t          Cycle theme",
         "",
         "  General:",
