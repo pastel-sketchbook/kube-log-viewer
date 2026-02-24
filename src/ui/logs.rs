@@ -139,18 +139,27 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         _ => " Logs ".to_string(),
     };
 
-    let follow_indicator = if app.follow_mode { " [FOLLOW] " } else { "" };
-    let search_indicator = if !app.search_query.is_empty() {
-        format!(" [/{}] ", app.search_query)
-    } else {
-        String::new()
-    };
-
     let theme = app.theme();
     let border_color = match app.focus {
         Focus::Logs => theme.border_focused,
         _ => theme.border_unfocused,
     };
+
+    let mut title_spans: Vec<Span> = vec![Span::styled(title, Style::default().fg(theme.accent))];
+    if app.follow_mode {
+        title_spans.push(Span::styled(
+            " [FOLLOW] ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if !app.search_query.is_empty() {
+        title_spans.push(Span::styled(
+            format!(" [/{}] ", app.search_query),
+            Style::default().fg(theme.search_fg),
+        ));
+    }
 
     let filtered_lines = app.filtered_log_lines();
     let total_lines = filtered_lines.len();
@@ -198,7 +207,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let block = Block::default()
-        .title(format!("{}{}{}", title, follow_indicator, search_indicator))
+        .title(Line::from(title_spans))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 
@@ -239,17 +248,40 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 // ---------------------------------------------------------------------------
 
 /// Try to parse a timestamp string into a `DateTime<Utc>`.
-/// Handles RFC 3339 (with timezone) and `YYYY-MM-DD HH:MM:SS` (assumed UTC).
+///
+/// Handles a wide range of ISO 8601 variants commonly found in K8s pod logs:
+/// - RFC 3339 with timezone: `2026-02-24T16:36:51Z`, `...+05:30`
+/// - RFC 3339 with fractional: `2026-02-24T16:36:51.600Z`, `.600000000Z`
+/// - Comma fractional (Python logging): `2026-02-24 15:05:18,976`
+/// - Dot fractional without TZ: `2026-02-24 15:05:18.976`, `...T15:05:18.976`
+/// - Plain without fractional: `2026-02-24 15:05:18`, `...T15:05:18`
+///
+/// Timezone-less timestamps are assumed UTC.
 pub(crate) fn parse_log_timestamp(ts: &str) -> Option<DateTime<Utc>> {
     let trimmed = ts.trim();
-    // Try RFC 3339 first (covers `2026-02-24T16:36:51.600Z`, `...+05:30`)
-    if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {
+
+    // Normalise comma to dot so Python-style `18,976` becomes `18.976`.
+    let normalised = trimmed.replace(',', ".");
+
+    // 1. RFC 3339 (requires timezone designator)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalised) {
         return Some(dt.to_utc());
     }
-    // Fall back to space-separated `YYYY-MM-DD HH:MM:SS` (assume UTC)
-    if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
-        return Some(naive.and_utc());
+
+    // 2. ISO variants without timezone — try most specific first.
+    const NAIVE_FMTS: &[&str] = &[
+        "%Y-%m-%dT%H:%M:%S%.f", // 2026-02-24T15:05:18.976
+        "%Y-%m-%d %H:%M:%S%.f", // 2026-02-24 15:05:18.976
+        "%Y-%m-%dT%H:%M:%S",    // 2026-02-24T15:05:18
+        "%Y-%m-%d %H:%M:%S",    // 2026-02-24 15:05:18
+    ];
+
+    for fmt in NAIVE_FMTS {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(&normalised, fmt) {
+            return Some(naive.and_utc());
+        }
     }
+
     None
 }
 
@@ -259,15 +291,21 @@ fn format_local(dt: DateTime<Utc>) -> String {
     format!("{} ", local.format("%Y-%m-%d %H:%M:%S"))
 }
 
-/// Format a duration as a compact relative string.
+/// Fixed display width for relative timestamps (right-aligned).
+/// Keeps log content vertically aligned regardless of value.
+const RELATIVE_WIDTH: usize = 8;
+
+/// Format a duration as a compact relative string, right-aligned to a fixed
+/// width so that log content after the timestamp starts at the same column.
 fn format_relative(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     let secs = now.signed_duration_since(dt).num_seconds().max(0);
-    match secs {
-        s if s < 60 => format!("{s}s ago "),
-        s if s < 3600 => format!("{}m ago ", s / 60),
-        s if s < 86400 => format!("{}h ago ", s / 3600),
-        s => format!("{}d ago ", s / 86400),
-    }
+    let rel = match secs {
+        s if s < 60 => format!("{s}s ago"),
+        s if s < 3600 => format!("{}m ago", s / 60),
+        s if s < 86400 => format!("{}h ago", s / 3600),
+        s => format!("{}d ago", s / 86400),
+    };
+    format!("{rel:>RELATIVE_WIDTH$} ")
 }
 
 /// Convert a matched timestamp string according to the display mode.
@@ -719,6 +757,52 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_comma_fractional_space() {
+        // Python logging format: `2026-02-24 15:05:18,976`
+        let dt = parse_log_timestamp("2026-02-24 15:05:18,976").unwrap();
+        assert_eq!(dt.timestamp(), 1771945518);
+    }
+
+    #[test]
+    fn test_parse_dot_fractional_space() {
+        let dt = parse_log_timestamp("2026-02-24 15:05:18.976").unwrap();
+        assert_eq!(dt.timestamp(), 1771945518);
+    }
+
+    #[test]
+    fn test_parse_dot_fractional_t_no_tz() {
+        // ISO with T separator, fractional, but no timezone
+        let dt = parse_log_timestamp("2026-02-24T15:05:18.976").unwrap();
+        assert_eq!(dt.timestamp(), 1771945518);
+    }
+
+    #[test]
+    fn test_parse_comma_fractional_t_no_tz() {
+        let dt = parse_log_timestamp("2026-02-24T15:05:18,976").unwrap();
+        assert_eq!(dt.timestamp(), 1771945518);
+    }
+
+    #[test]
+    fn test_parse_t_no_fractional_no_tz() {
+        let dt = parse_log_timestamp("2026-02-24T15:05:18").unwrap();
+        assert_eq!(dt.timestamp(), 1771945518);
+    }
+
+    #[test]
+    fn test_parse_k8s_nanosecond() {
+        // K8s native format with 9-digit fractional
+        let dt = parse_log_timestamp("2026-02-24T16:36:51.600000000Z").unwrap();
+        assert_eq!(dt.timestamp(), 1771951011);
+    }
+
+    #[test]
+    fn test_parse_comma_fractional_rfc3339() {
+        // Comma fractional with timezone (rare but possible)
+        let dt = parse_log_timestamp("2026-02-24T15:05:18,976Z").unwrap();
+        assert_eq!(dt.timestamp(), 1771945518);
+    }
+
+    #[test]
     fn test_parse_invalid_returns_none() {
         assert!(parse_log_timestamp("not-a-timestamp").is_none());
         assert!(parse_log_timestamp("").is_none());
@@ -742,7 +826,7 @@ mod tests {
         let now = Utc::now();
         let dt = now - chrono::Duration::seconds(30);
         let result = format_relative(dt, now);
-        assert_eq!(result, "30s ago ");
+        assert_eq!(result, " 30s ago ");
     }
 
     #[test]
@@ -750,7 +834,7 @@ mod tests {
         let now = Utc::now();
         let dt = now - chrono::Duration::seconds(300);
         let result = format_relative(dt, now);
-        assert_eq!(result, "5m ago ");
+        assert_eq!(result, "  5m ago ");
     }
 
     #[test]
@@ -758,7 +842,7 @@ mod tests {
         let now = Utc::now();
         let dt = now - chrono::Duration::seconds(7200);
         let result = format_relative(dt, now);
-        assert_eq!(result, "2h ago ");
+        assert_eq!(result, "  2h ago ");
     }
 
     #[test]
@@ -766,7 +850,7 @@ mod tests {
         let now = Utc::now();
         let dt = now - chrono::Duration::seconds(172800);
         let result = format_relative(dt, now);
-        assert_eq!(result, "2d ago ");
+        assert_eq!(result, "  2d ago ");
     }
 
     // -- convert_timestamp --------------------------------------------------

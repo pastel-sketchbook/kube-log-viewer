@@ -52,7 +52,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 // ---------------------------------------------------------------------------
 
 fn render_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(60, 70, frame.area());
+    let area = centered_rect(60, 80, frame.area());
     frame.render_widget(Clear, area);
 
     let theme = app.theme();
