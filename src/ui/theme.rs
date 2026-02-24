@@ -57,8 +57,17 @@ pub const THEMES: &[Theme] = &[
     SOLARIZED_DARK,
     FLEXOKI_DARK,
     AYU_DARK,
+    GHOST_DARK,
+    PASTEL_WAVES_DARK,
+    ZOEGI_DARK,
+    HIGH_CONTRAST,
     GRUVBOX_LIGHT,
+    SOLARIZED_LIGHT,
+    FLEXOKI_LIGHT,
     AYU_LIGHT,
+    GHOST_LIGHT,
+    PASTEL_WAVES_LIGHT,
+    ZOEGI_LIGHT,
 ];
 
 // -- Built-in default -------------------------------------------------------
@@ -355,13 +364,391 @@ pub const AYU_LIGHT: Theme = Theme {
     popup_fg: Color::Rgb(0x5c, 0x61, 0x66),
 };
 
+// -- Flexoki Light (ref: flexoki.json) ---------------------------------------
+
+pub const FLEXOKI_LIGHT: Theme = Theme {
+    name: "Flexoki Light",
+
+    fg: Color::Rgb(0x10, 0x0f, 0x0f),     // #100F0F
+    muted: Color::Rgb(0x6f, 0x6e, 0x69),  // #6F6E69
+    accent: Color::Rgb(0x3a, 0xa9, 0x9f), // #3AA99F (cyan)
+
+    header_border: Color::Rgb(0x20, 0x5e, 0xa6), // #205EA6 (blue)
+    context_fg: Color::Rgb(0x20, 0x5e, 0xa6),
+    namespace_fg: Color::Rgb(0x87, 0x9a, 0x39), // #879A39 (green)
+
+    border_focused: Color::Rgb(0x3a, 0xa9, 0x9f),
+    border_unfocused: Color::Rgb(0xe6, 0xe4, 0xd9), // #E6E4D9
+
+    status_running: Color::Rgb(0x87, 0x9a, 0x39),
+    status_pending: Color::Rgb(0xa0, 0x7c, 0x10), // #A07C10
+    status_succeeded: Color::Rgb(0x20, 0x5e, 0xa6),
+    status_failed: Color::Rgb(0xd1, 0x4d, 0x41), // #D14D41
+    status_unknown: Color::Rgb(0x6f, 0x6e, 0x69),
+
+    log_error: Color::Rgb(0xd1, 0x4d, 0x41),
+    log_warn: Color::Rgb(0xa0, 0x7c, 0x10),
+    log_debug: Color::Rgb(0x6f, 0x6e, 0x69),
+    zebra_bg: Color::Rgb(0xf2, 0xf0, 0xe5), // list.even.background
+
+    highlight_bg: Color::Rgb(0xf2, 0xf0, 0xe5), // muted.background
+
+    search_fg: Color::Rgb(0xa0, 0x7c, 0x10),
+    search_input_bg: Color::Rgb(0xf2, 0xf0, 0xe5),
+    search_match_fg: Color::Rgb(0xff, 0xfc, 0xf0), // #FFFCF0 (background)
+    search_match_bg: Color::Rgb(0xa0, 0x7c, 0x10),
+
+    statusbar_bg: Color::Rgb(0xf2, 0xf0, 0xe5),
+    statusbar_key: Color::Rgb(0x3a, 0xa9, 0x9f),
+    statusbar_label: Color::Rgb(0x6f, 0x6e, 0x69),
+
+    popup_border: Color::Rgb(0x3a, 0xa9, 0x9f),
+    popup_fg: Color::Rgb(0x10, 0x0f, 0x0f),
+};
+
+// -- Solarized Light (ref: solarized.json) -----------------------------------
+
+pub const SOLARIZED_LIGHT: Theme = Theme {
+    name: "Solarized Light",
+
+    fg: Color::Rgb(0x58, 0x6e, 0x75),     // #586E75 (base0)
+    muted: Color::Rgb(0x93, 0xa1, 0xa1),  // #93A1A1 (base1)
+    accent: Color::Rgb(0x26, 0x8b, 0xd2), // #268BD2 (blue)
+
+    header_border: Color::Rgb(0x26, 0x8b, 0xd2),
+    context_fg: Color::Rgb(0x26, 0x8b, 0xd2),
+    namespace_fg: Color::Rgb(0x85, 0x99, 0x00), // #859900 (green)
+
+    border_focused: Color::Rgb(0x26, 0x8b, 0xd2),
+    border_unfocused: Color::Rgb(0xdc, 0xd4, 0xbc), // #DCD4BC
+
+    status_running: Color::Rgb(0x85, 0x99, 0x00),
+    status_pending: Color::Rgb(0xb5, 0x89, 0x00), // #B58900 (yellow)
+    status_succeeded: Color::Rgb(0x2a, 0xa1, 0x98), // #2AA198 (cyan)
+    status_failed: Color::Rgb(0xdc, 0x32, 0x2f),  // #DC322F (red)
+    status_unknown: Color::Rgb(0x93, 0xa1, 0xa1),
+
+    log_error: Color::Rgb(0xdc, 0x32, 0x2f),
+    log_warn: Color::Rgb(0xb5, 0x89, 0x00),
+    log_debug: Color::Rgb(0x93, 0xa1, 0xa1),
+    zebra_bg: Color::Rgb(0xee, 0xe8, 0xd5), // #EEE8D5
+
+    highlight_bg: Color::Rgb(0xee, 0xe8, 0xd5),
+
+    search_fg: Color::Rgb(0xb5, 0x89, 0x00),
+    search_input_bg: Color::Rgb(0xee, 0xe8, 0xd5),
+    search_match_fg: Color::Rgb(0xfd, 0xf6, 0xe3), // #FDF6E3 (background)
+    search_match_bg: Color::Rgb(0xb5, 0x89, 0x00),
+
+    statusbar_bg: Color::Rgb(0xee, 0xe8, 0xd5),
+    statusbar_key: Color::Rgb(0x26, 0x8b, 0xd2),
+    statusbar_label: Color::Rgb(0x93, 0xa1, 0xa1),
+
+    popup_border: Color::Rgb(0x26, 0x8b, 0xd2),
+    popup_fg: Color::Rgb(0x58, 0x6e, 0x75),
+};
+
+// -- Ghost in the Shell Dark (ref: ghost-in-the-shell.json) ------------------
+
+pub const GHOST_DARK: Theme = Theme {
+    name: "Ghost Dark",
+
+    fg: Color::Rgb(0xb3, 0xe5, 0xfc),     // #b3e5fc
+    muted: Color::Rgb(0x6b, 0x8e, 0x9e),  // #6b8e9e
+    accent: Color::Rgb(0x00, 0xff, 0x9f), // #00ff9f (cyberpunk green)
+
+    header_border: Color::Rgb(0x26, 0xc6, 0xda), // #26c6da (blue)
+    context_fg: Color::Rgb(0x26, 0xc6, 0xda),
+    namespace_fg: Color::Rgb(0x00, 0xff, 0x9f), // #00ff9f (green)
+
+    border_focused: Color::Rgb(0x00, 0xff, 0x9f),
+    border_unfocused: Color::Rgb(0x1a, 0x23, 0x32), // #1a2332
+
+    status_running: Color::Rgb(0x00, 0xff, 0x9f),
+    status_pending: Color::Rgb(0xff, 0xa7, 0x26), // #ffa726
+    status_succeeded: Color::Rgb(0x26, 0xc6, 0xda),
+    status_failed: Color::Rgb(0xff, 0x00, 0x66), // #ff0066
+    status_unknown: Color::Rgb(0x6b, 0x8e, 0x9e),
+
+    log_error: Color::Rgb(0xff, 0x00, 0x66),
+    log_warn: Color::Rgb(0xff, 0xa7, 0x26),
+    log_debug: Color::Rgb(0x6b, 0x8e, 0x9e),
+    zebra_bg: Color::Rgb(0x0d, 0x11, 0x17), // #0d1117
+
+    highlight_bg: Color::Rgb(0x0d, 0x11, 0x17),
+
+    search_fg: Color::Rgb(0xff, 0xa7, 0x26),
+    search_input_bg: Color::Rgb(0x0d, 0x11, 0x17),
+    search_match_fg: Color::Rgb(0x0a, 0x0e, 0x14), // #0a0e14 (background)
+    search_match_bg: Color::Rgb(0xff, 0xa7, 0x26),
+
+    statusbar_bg: Color::Rgb(0x0d, 0x11, 0x17),
+    statusbar_key: Color::Rgb(0x00, 0xff, 0x9f),
+    statusbar_label: Color::Rgb(0x6b, 0x8e, 0x9e),
+
+    popup_border: Color::Rgb(0x00, 0xff, 0x9f),
+    popup_fg: Color::Rgb(0xb3, 0xe5, 0xfc),
+};
+
+// -- Ghost in the Shell Light (ref: ghost-in-the-shell.json) -----------------
+
+pub const GHOST_LIGHT: Theme = Theme {
+    name: "Ghost Light",
+
+    fg: Color::Rgb(0x0a, 0x19, 0x29),     // #0a1929
+    muted: Color::Rgb(0x5a, 0x6f, 0x84),  // #5a6f84
+    accent: Color::Rgb(0x00, 0x85, 0x77), // #008577
+
+    header_border: Color::Rgb(0x02, 0x77, 0xbd), // #0277bd (blue)
+    context_fg: Color::Rgb(0x02, 0x77, 0xbd),
+    namespace_fg: Color::Rgb(0x00, 0xa3, 0x90), // #00a390 (green)
+
+    border_focused: Color::Rgb(0x00, 0x85, 0x77),
+    border_unfocused: Color::Rgb(0xd0, 0xd7, 0xde), // #d0d7de
+
+    status_running: Color::Rgb(0x00, 0xa3, 0x90),
+    status_pending: Color::Rgb(0xe6, 0x77, 0x00), // #e67700
+    status_succeeded: Color::Rgb(0x02, 0x77, 0xbd),
+    status_failed: Color::Rgb(0xd3, 0x2f, 0x2f), // #d32f2f
+    status_unknown: Color::Rgb(0x5a, 0x6f, 0x84),
+
+    log_error: Color::Rgb(0xd3, 0x2f, 0x2f),
+    log_warn: Color::Rgb(0xe6, 0x77, 0x00),
+    log_debug: Color::Rgb(0x5a, 0x6f, 0x84),
+    zebra_bg: Color::Rgb(0xe6, 0xee, 0xf5), // #e6eef5
+
+    highlight_bg: Color::Rgb(0xe6, 0xee, 0xf5),
+
+    search_fg: Color::Rgb(0xe6, 0x77, 0x00),
+    search_input_bg: Color::Rgb(0xe6, 0xee, 0xf5),
+    search_match_fg: Color::Rgb(0xf0, 0xf4, 0xf8), // #f0f4f8 (background)
+    search_match_bg: Color::Rgb(0xe6, 0x77, 0x00),
+
+    statusbar_bg: Color::Rgb(0xe6, 0xee, 0xf5),
+    statusbar_key: Color::Rgb(0x00, 0x85, 0x77),
+    statusbar_label: Color::Rgb(0x5a, 0x6f, 0x84),
+
+    popup_border: Color::Rgb(0x00, 0x85, 0x77),
+    popup_fg: Color::Rgb(0x0a, 0x19, 0x29),
+};
+
+// -- High Contrast (ref: high_contrast.ron) ----------------------------------
+
+pub const HIGH_CONTRAST: Theme = Theme {
+    name: "High Contrast",
+
+    fg: Color::White,
+    muted: Color::Rgb(0xaa, 0xaa, 0xaa), // #AAAAAA
+    accent: Color::Cyan,                 // #00FFFF
+
+    header_border: Color::White,
+    context_fg: Color::Cyan,
+    namespace_fg: Color::Green, // #00FF00
+
+    border_focused: Color::White,
+    border_unfocused: Color::Rgb(0x80, 0x80, 0x80), // #808080
+
+    status_running: Color::Green,
+    status_pending: Color::Yellow, // #FFFF00
+    status_succeeded: Color::Cyan,
+    status_failed: Color::Red, // #FF0000
+    status_unknown: Color::Rgb(0x80, 0x80, 0x80),
+
+    log_error: Color::Red,
+    log_warn: Color::Yellow,
+    log_debug: Color::Rgb(0xaa, 0xaa, 0xaa),
+    zebra_bg: Color::Rgb(0x1a, 0x1a, 0x1a), // slight gray on pure black
+
+    highlight_bg: Color::Rgb(0x33, 0x33, 0x33), // #333333
+
+    search_fg: Color::Yellow,
+    search_input_bg: Color::Rgb(0x33, 0x33, 0x33),
+    search_match_fg: Color::Black,
+    search_match_bg: Color::Yellow,
+
+    statusbar_bg: Color::Rgb(0x33, 0x33, 0x33),
+    statusbar_key: Color::Yellow,
+    statusbar_label: Color::Rgb(0xaa, 0xaa, 0xaa),
+
+    popup_border: Color::White,
+    popup_fg: Color::White,
+};
+
+// -- Pastel Waves Dark (ref: pastel-waves.json) ------------------------------
+
+pub const PASTEL_WAVES_DARK: Theme = Theme {
+    name: "Pastel Waves Dark",
+
+    fg: Color::Rgb(0xc5, 0xd9, 0xe8),     // #c5d9e8
+    muted: Color::Rgb(0x6b, 0x7e, 0x99),  // #6b7e99
+    accent: Color::Rgb(0x6b, 0x9b, 0xc0), // #6b9bc0
+
+    header_border: Color::Rgb(0x8f, 0xc8, 0xe0), // #8fc8e0 (blue)
+    context_fg: Color::Rgb(0x8f, 0xc8, 0xe0),
+    namespace_fg: Color::Rgb(0x7d, 0xd3, 0xc4), // #7dd3c4 (green)
+
+    border_focused: Color::Rgb(0x6b, 0x9b, 0xc0),
+    border_unfocused: Color::Rgb(0x2a, 0x3d, 0x52), // #2a3d52
+
+    status_running: Color::Rgb(0x7d, 0xd3, 0xc4),
+    status_pending: Color::Rgb(0xff, 0xe5, 0xa5), // #ffe5a5
+    status_succeeded: Color::Rgb(0x8f, 0xc8, 0xe0),
+    status_failed: Color::Rgb(0xf5, 0xa9, 0xa4), // #f5a9a4
+    status_unknown: Color::Rgb(0x6b, 0x7e, 0x99),
+
+    log_error: Color::Rgb(0xf5, 0xa9, 0xa4),
+    log_warn: Color::Rgb(0xff, 0xe5, 0xa5),
+    log_debug: Color::Rgb(0x6b, 0x7e, 0x99),
+    zebra_bg: Color::Rgb(0x15, 0x24, 0x33), // #152433
+
+    highlight_bg: Color::Rgb(0x1a, 0x2a, 0x3a), // muted.background
+
+    search_fg: Color::Rgb(0xff, 0xe5, 0xa5),
+    search_input_bg: Color::Rgb(0x1a, 0x2a, 0x3a),
+    search_match_fg: Color::Rgb(0x0d, 0x16, 0x20), // #0d1620 (background)
+    search_match_bg: Color::Rgb(0xff, 0xe5, 0xa5),
+
+    statusbar_bg: Color::Rgb(0x1a, 0x2a, 0x3a),
+    statusbar_key: Color::Rgb(0x6b, 0x9b, 0xc0),
+    statusbar_label: Color::Rgb(0x6b, 0x7e, 0x99),
+
+    popup_border: Color::Rgb(0x6b, 0x9b, 0xc0),
+    popup_fg: Color::Rgb(0xc5, 0xd9, 0xe8),
+};
+
+// -- Pastel Waves Light (ref: pastel-waves.json) -----------------------------
+
+pub const PASTEL_WAVES_LIGHT: Theme = Theme {
+    name: "Pastel Waves Light",
+
+    fg: Color::Rgb(0x2c, 0x5e, 0x79),     // #2c5e79
+    muted: Color::Rgb(0x8b, 0xa5, 0xb8),  // #8ba5b8
+    accent: Color::Rgb(0x6b, 0x9b, 0xc0), // #6b9bc0
+
+    header_border: Color::Rgb(0x6b, 0x9b, 0xc0),
+    context_fg: Color::Rgb(0x6b, 0x9b, 0xc0),
+    namespace_fg: Color::Rgb(0x4d, 0xb6, 0xac), // #4db6ac (green)
+
+    border_focused: Color::Rgb(0x6b, 0x9b, 0xc0),
+    border_unfocused: Color::Rgb(0xb0, 0xbe, 0xc5), // #b0bec5
+
+    status_running: Color::Rgb(0x4d, 0xb6, 0xac),
+    status_pending: Color::Rgb(0xff, 0xd5, 0x4f), // #ffd54f
+    status_succeeded: Color::Rgb(0x6b, 0x9b, 0xc0),
+    status_failed: Color::Rgb(0xe5, 0x73, 0x73), // #e57373
+    status_unknown: Color::Rgb(0x8b, 0xa5, 0xb8),
+
+    log_error: Color::Rgb(0xe5, 0x73, 0x73),
+    log_warn: Color::Rgb(0xff, 0xd5, 0x4f),
+    log_debug: Color::Rgb(0x8b, 0xa5, 0xb8),
+    zebra_bg: Color::Rgb(0xe8, 0xef, 0xf2), // #e8eff2
+
+    highlight_bg: Color::Rgb(0xe8, 0xef, 0xf2),
+
+    search_fg: Color::Rgb(0xff, 0xd5, 0x4f),
+    search_input_bg: Color::Rgb(0xe8, 0xef, 0xf2),
+    search_match_fg: Color::Rgb(0xf5, 0xf6, 0xf1), // #f5f6f1 (background)
+    search_match_bg: Color::Rgb(0xff, 0xd5, 0x4f),
+
+    statusbar_bg: Color::Rgb(0xe8, 0xef, 0xf2),
+    statusbar_key: Color::Rgb(0x6b, 0x9b, 0xc0),
+    statusbar_label: Color::Rgb(0x8b, 0xa5, 0xb8),
+
+    popup_border: Color::Rgb(0x6b, 0x9b, 0xc0),
+    popup_fg: Color::Rgb(0x2c, 0x5e, 0x79),
+};
+
+// -- Zoegi Dark (ref: zoegi.json) --------------------------------------------
+
+pub const ZOEGI_DARK: Theme = Theme {
+    name: "Zoegi Dark",
+
+    fg: Color::Rgb(0xdd, 0xdd, 0xdd),     // #dddddd
+    muted: Color::Rgb(0x99, 0x99, 0x99),  // #999999
+    accent: Color::Rgb(0x66, 0xb3, 0x95), // #66b395
+
+    header_border: Color::Rgb(0x72, 0x98, 0xcc), // #7298cc (blue)
+    context_fg: Color::Rgb(0x77, 0xb9, 0xc0),    // #77b9c0 (cyan)
+    namespace_fg: Color::Rgb(0x66, 0xb3, 0x95),  // #66b395 (green)
+
+    border_focused: Color::Rgb(0x66, 0xb3, 0x95),
+    border_unfocused: Color::Rgb(0x33, 0x33, 0x33), // #333333
+
+    status_running: Color::Rgb(0x66, 0xb3, 0x95),
+    status_pending: Color::Rgb(0xe7, 0xd3, 0x8f), // #e7d38f
+    status_succeeded: Color::Rgb(0x72, 0x98, 0xcc),
+    status_failed: Color::Rgb(0xd0, 0x74, 0x68), // #d07468
+    status_unknown: Color::Rgb(0x99, 0x99, 0x99),
+
+    log_error: Color::Rgb(0xd0, 0x74, 0x68),
+    log_warn: Color::Rgb(0xe7, 0xd3, 0x8f),
+    log_debug: Color::Rgb(0x99, 0x99, 0x99),
+    zebra_bg: Color::Rgb(0x26, 0x26, 0x26), // #262626
+
+    highlight_bg: Color::Rgb(0x26, 0x26, 0x26),
+
+    search_fg: Color::Rgb(0xe7, 0xd3, 0x8f),
+    search_input_bg: Color::Rgb(0x26, 0x26, 0x26),
+    search_match_fg: Color::Rgb(0x2b, 0x2b, 0x2b), // #2b2b2b (background)
+    search_match_bg: Color::Rgb(0xe7, 0xd3, 0x8f),
+
+    statusbar_bg: Color::Rgb(0x26, 0x26, 0x26),
+    statusbar_key: Color::Rgb(0x66, 0xb3, 0x95),
+    statusbar_label: Color::Rgb(0x99, 0x99, 0x99),
+
+    popup_border: Color::Rgb(0x66, 0xb3, 0x95),
+    popup_fg: Color::Rgb(0xdd, 0xdd, 0xdd),
+};
+
+// -- Zoegi Light (ref: zoegi.json) -------------------------------------------
+
+pub const ZOEGI_LIGHT: Theme = Theme {
+    name: "Zoegi Light",
+
+    fg: Color::Rgb(0x33, 0x33, 0x33),     // #333333
+    muted: Color::Rgb(0x59, 0x59, 0x59),  // #595959
+    accent: Color::Rgb(0x37, 0x79, 0x61), // #377961
+
+    header_border: Color::Rgb(0x3e, 0x65, 0x9a), // #3e659a (blue)
+    context_fg: Color::Rgb(0x56, 0x8b, 0x99),    // #568b99 (cyan)
+    namespace_fg: Color::Rgb(0x37, 0x79, 0x61),  // #377961 (green)
+
+    border_focused: Color::Rgb(0x37, 0x79, 0x61),
+    border_unfocused: Color::Rgb(0xe0, 0xe0, 0xe0), // ~#0000001a on white
+
+    status_running: Color::Rgb(0x37, 0x79, 0x61),
+    status_pending: Color::Rgb(0xbf, 0x93, 0x40), // #bf9340
+    status_succeeded: Color::Rgb(0x56, 0x8b, 0x99),
+    status_failed: Color::Rgb(0xcc, 0x5c, 0x5c), // #cc5c5c
+    status_unknown: Color::Rgb(0x59, 0x59, 0x59),
+
+    log_error: Color::Rgb(0xcc, 0x5c, 0x5c),
+    log_warn: Color::Rgb(0xbf, 0x93, 0x40),
+    log_debug: Color::Rgb(0x59, 0x59, 0x59),
+    zebra_bg: Color::Rgb(0xf3, 0xf3, 0xf3), // secondary.background
+
+    highlight_bg: Color::Rgb(0xeb, 0xeb, 0xeb), // list.active.background
+
+    search_fg: Color::Rgb(0xbf, 0x93, 0x40),
+    search_input_bg: Color::Rgb(0xf3, 0xf3, 0xf3),
+    search_match_fg: Color::Rgb(0xff, 0xff, 0xff), // #ffffff (background)
+    search_match_bg: Color::Rgb(0xbf, 0x93, 0x40),
+
+    statusbar_bg: Color::Rgb(0xf3, 0xf3, 0xf3),
+    statusbar_key: Color::Rgb(0x37, 0x79, 0x61),
+    statusbar_label: Color::Rgb(0x59, 0x59, 0x59),
+
+    popup_border: Color::Rgb(0x37, 0x79, 0x61),
+    popup_fg: Color::Rgb(0x33, 0x33, 0x33),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_theme_count() {
-        assert_eq!(THEMES.len(), 7);
+        assert_eq!(THEMES.len(), 16);
     }
 
     #[test]
