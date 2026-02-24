@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::Api;
+use tracing::{info, instrument};
 
 use super::create_client;
 
@@ -53,6 +54,7 @@ impl PodInfo {
 }
 
 /// List pods in the given namespace and context, returning structured info.
+#[instrument(skip_all, fields(context, namespace))]
 pub async fn list_pods(context: &str, namespace: &str) -> Result<Vec<PodInfo>> {
     let client = create_client(Some(context)).await?;
     let pod_api: Api<Pod> = Api::namespaced(client, namespace);
@@ -62,6 +64,8 @@ pub async fn list_pods(context: &str, namespace: &str) -> Result<Vec<PodInfo>> {
         .with_context(|| format!("failed to list pods in namespace '{namespace}'"))?;
 
     let pods: Vec<PodInfo> = pod_list.items.iter().map(PodInfo::from_pod).collect();
+
+    info!(context, namespace, count = pods.len(), "loaded pods");
 
     Ok(pods)
 }

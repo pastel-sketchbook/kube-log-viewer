@@ -46,13 +46,15 @@ Implementation roadmap organized in phases. Each phase builds on the previous.
 - [x] Log level colorization (ERROR=red, WARN=yellow, INFO=white, DEBUG=gray)
 - [x] Log line cap at 50,000 with oldest-drain strategy
 - [x] Graceful error display (K8s errors shown in log panel, not crash)
+- [x] Structured tracing: daily-rotated log file via `tracing` + `tracing-appender`
+- [x] `lib.rs` for crate-level re-exports (integration test access)
 
 ## Phase 6: Polish & Testing
 
 - [x] Unit tests: `PodInfo` extraction from K8s API objects
 - [x] Unit tests: log filtering and search highlight logic
 - [x] Unit tests: key handling state transitions
-- [ ] Integration test: full event loop with mock K8s responses
+- [x] Integration test: full event loop with mock K8s responses (12 tests)
 - [x] `cargo clippy -- -D warnings` passes clean
 - [x] `cargo test` passes clean
 - [x] Error handling audit: no `unwrap()` in non-test code

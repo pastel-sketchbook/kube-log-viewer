@@ -11,10 +11,27 @@ A terminal UI for streaming and searching Kubernetes pod logs.
 - **Multi-container support** -- Select specific containers within multi-container pods
 - **Context switching** -- Switch between Kubernetes contexts from within the TUI
 
-## Requirements
+## Prerequisites
 
 - Rust toolchain (1.75+)
 - Access to a Kubernetes cluster (valid `~/.kube/config`)
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) (`az`) -- required for authenticating to AKS clusters
+- [kubelogin](https://github.com/Azure/kubelogin) -- required for AAD/Entra ID-based AKS authentication
+
+### Azure (AKS) setup
+
+```sh
+# Login to Azure
+az login
+
+# Get credentials for your AKS cluster (merges into ~/.kube/config)
+az aks get-credentials --resource-group <resource-group> --name <cluster-name>
+
+# If your cluster uses AAD/Entra ID auth, convert the kubeconfig for kubelogin
+kubelogin convert-kubeconfig -l azurecli
+```
+
+After this, `~/.kube/config` will contain the context for your cluster and `kube-log-viewer` can connect to it.
 
 ## Installation
 

@@ -6,6 +6,7 @@ use futures::StreamExt;
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
 use tokio::sync::mpsc;
+use tracing::{debug, error, info};
 
 use crate::event::AppEvent;
 use crate::k8s;
@@ -66,6 +67,9 @@ pub struct App {
     pub selected_container: Option<String>,
     pub containers: Vec<String>,
 
+    // Error overlay (displayed in the log pane)
+    pub error_message: Option<String>,
+
     // Control
     pub should_quit: bool,
 
@@ -101,6 +105,8 @@ impl App {
             selected_pod: None,
             selected_container: None,
             containers: Vec::new(),
+
+            error_message: None,
 
             should_quit: false,
             tx,
@@ -156,7 +162,7 @@ impl App {
 
     // -- Key handling -------------------------------------------------------
 
-    fn handle_key(&mut self, key: KeyEvent) {
+    pub fn handle_key(&mut self, key: KeyEvent) {
         // Ctrl+C always quits
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.should_quit = true;
@@ -373,6 +379,7 @@ impl App {
         match kind {
             PopupKind::Namespaces => {
                 if let Some(ns) = self.namespaces.get(i).cloned() {
+                    info!(namespace = %ns, "switching namespace");
                     self.current_namespace = ns;
                     self.selected_pod = None;
                     self.selected_container = None;
@@ -384,6 +391,7 @@ impl App {
             }
             PopupKind::Contexts => {
                 if let Some(ctx) = self.contexts.get(i).cloned() {
+                    info!(context = %ctx, "switching context");
                     self.current_context = ctx;
                     self.current_namespace = String::from("default");
                     self.selected_pod = None;
@@ -399,6 +407,7 @@ impl App {
             }
             PopupKind::Containers => {
                 if let Some(container) = self.containers.get(i).cloned() {
+                    info!(container = %container, "switching container");
                     self.selected_container = Some(container);
                     self.log_lines.clear();
                     self.log_scroll_offset = 0;
@@ -417,15 +426,19 @@ impl App {
 
     // -- App events from background tasks -----------------------------------
 
-    fn handle_app_event(&mut self, event: AppEvent) {
+    pub fn handle_app_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::ContextsLoaded(contexts, current) => {
+                info!(count = contexts.len(), current = %current, "contexts loaded");
+                self.error_message = None;
                 self.contexts = contexts;
                 self.current_context = current;
                 self.load_namespaces();
                 self.load_pods();
             }
             AppEvent::NamespacesLoaded(namespaces) => {
+                debug!(count = namespaces.len(), "namespaces loaded");
+                self.error_message = None;
                 self.namespaces = namespaces;
                 if !self.namespaces.contains(&self.current_namespace) {
                     self.current_namespace = self
@@ -436,25 +449,31 @@ impl App {
                 }
             }
             AppEvent::PodsUpdated(pods) => {
+                debug!(count = pods.len(), "pods updated");
+                self.error_message = None;
                 self.pods = pods;
                 if self.pod_list_state.selected().is_none() && !self.pods.is_empty() {
                     self.pod_list_state.select(Some(0));
                 }
             }
             AppEvent::LogLine(line) => {
+                self.error_message = None;
                 self.log_lines.push(line);
                 if self.follow_mode {
                     self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
                 }
                 // Cap log lines to prevent unbounded memory growth
                 if self.log_lines.len() > 50_000 {
+                    debug!("log line cap reached, draining oldest 10,000 lines");
                     self.log_lines.drain(..10_000);
                 }
             }
             AppEvent::LogStreamEnded => {
-                // Stream ended naturally; no action needed
+                debug!("log stream ended");
             }
             AppEvent::Error(msg) => {
+                error!(message = %msg, "background task error");
+                self.error_message = Some(msg.clone());
                 self.log_lines.push(format!("[ERROR] {}", msg));
             }
         }
@@ -479,6 +498,7 @@ impl App {
     // -- K8s background operations ------------------------------------------
 
     fn load_contexts(&self) {
+        info!("spawning context load task");
         let tx = self.tx.clone();
         tokio::spawn(async move {
             match k8s::contexts::load_contexts() {
@@ -486,6 +506,7 @@ impl App {
                     let _ = tx.send(AppEvent::ContextsLoaded(contexts, current));
                 }
                 Err(e) => {
+                    error!(error = %e, "failed to load contexts");
                     let _ = tx.send(AppEvent::Error(format!("Failed to load contexts: {e}")));
                 }
             }
@@ -493,6 +514,7 @@ impl App {
     }
 
     fn load_namespaces(&self) {
+        info!(context = %self.current_context, "spawning namespace load task");
         let tx = self.tx.clone();
         let context = self.current_context.clone();
         tokio::spawn(async move {
@@ -501,6 +523,7 @@ impl App {
                     let _ = tx.send(AppEvent::NamespacesLoaded(namespaces));
                 }
                 Err(e) => {
+                    error!(error = %e, "failed to load namespaces");
                     let _ = tx.send(AppEvent::Error(format!("Failed to load namespaces: {e}")));
                 }
             }
@@ -508,6 +531,11 @@ impl App {
     }
 
     fn load_pods(&self) {
+        info!(
+            context = %self.current_context,
+            namespace = %self.current_namespace,
+            "spawning pod load task"
+        );
         let tx = self.tx.clone();
         let context = self.current_context.clone();
         let namespace = self.current_namespace.clone();
@@ -517,6 +545,7 @@ impl App {
                     let _ = tx.send(AppEvent::PodsUpdated(pods));
                 }
                 Err(e) => {
+                    error!(error = %e, "failed to load pods");
                     let _ = tx.send(AppEvent::Error(format!("Failed to load pods: {e}")));
                 }
             }
@@ -524,6 +553,7 @@ impl App {
     }
 
     fn start_log_stream(&mut self, pod_name: &str, container: Option<&str>) {
+        info!(pod = pod_name, container = container, "starting log stream");
         self.cancel_log_stream();
 
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
@@ -550,6 +580,7 @@ impl App {
                     let _ = tx.send(AppEvent::LogStreamEnded);
                 }
                 Err(e) => {
+                    error!(error = %e, "log stream failed");
                     let _ = tx.send(AppEvent::Error(format!("Log stream error: {e}")));
                 }
             }
@@ -558,6 +589,7 @@ impl App {
 
     fn cancel_log_stream(&mut self) {
         if let Some(cancel_tx) = self.log_cancel_tx.take() {
+            debug!("cancelling active log stream");
             let _ = cancel_tx.send(true);
         }
     }
@@ -918,6 +950,25 @@ mod tests {
         let mut app = test_app();
         app.handle_app_event(AppEvent::Error("connection refused".to_string()));
         assert_eq!(app.log_lines, vec!["[ERROR] connection refused"]);
+        assert_eq!(app.error_message, Some("connection refused".to_string()));
+    }
+
+    #[test]
+    fn test_error_message_cleared_on_success() {
+        let mut app = test_app();
+        app.error_message = Some("old error".to_string());
+
+        app.handle_app_event(AppEvent::PodsUpdated(vec![]));
+        assert!(app.error_message.is_none());
+    }
+
+    #[test]
+    fn test_error_message_cleared_on_log_line() {
+        let mut app = test_app();
+        app.error_message = Some("stream error".to_string());
+
+        app.handle_app_event(AppEvent::LogLine("new line".to_string()));
+        assert!(app.error_message.is_none());
     }
 
     #[test]

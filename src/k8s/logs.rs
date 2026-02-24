@@ -4,6 +4,7 @@ use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::{Api, LogParams};
 use tokio::sync::{mpsc, watch};
+use tracing::{debug, info, instrument, warn};
 
 use crate::event::AppEvent;
 
@@ -12,6 +13,7 @@ use super::create_client;
 /// Stream log lines from a pod, sending each line over `tx`.
 ///
 /// Respects the `cancel_rx` watch channel for cooperative cancellation.
+#[instrument(skip(cancel_rx, tx), fields(context, namespace, pod_name, container))]
 pub async fn stream_logs(
     context: &str,
     namespace: &str,
@@ -20,6 +22,8 @@ pub async fn stream_logs(
     mut cancel_rx: watch::Receiver<bool>,
     tx: mpsc::UnboundedSender<AppEvent>,
 ) -> Result<()> {
+    info!("starting log stream");
+
     let client = create_client(Some(context)).await?;
     let pod_api: Api<Pod> = Api::namespaced(client, namespace);
 
@@ -36,6 +40,7 @@ pub async fn stream_logs(
         .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
 
     let mut lines = stream.lines();
+    let mut line_count: u64 = 0;
 
     loop {
         tokio::select! {
@@ -43,18 +48,24 @@ pub async fn stream_logs(
                 match line {
                     Some(Ok(text)) => {
                         if !text.is_empty() {
+                            line_count += 1;
                             let _ = tx.send(AppEvent::LogLine(text));
                         }
                     }
                     Some(Err(e)) => {
+                        warn!(error = %e, "log stream error");
                         let _ = tx.send(AppEvent::Error(format!("Log stream error: {e}")));
                         break;
                     }
-                    None => break,
+                    None => {
+                        debug!(line_count, "log stream ended naturally");
+                        break;
+                    }
                 }
             }
             _ = cancel_rx.changed() => {
                 if *cancel_rx.borrow() {
+                    info!(line_count, "log stream cancelled");
                     break;
                 }
             }

@@ -6,11 +6,17 @@ pub mod pods;
 use anyhow::{Context, Result};
 use kube::config::KubeConfigOptions;
 use kube::{Client, Config};
+use tracing::{debug, instrument};
 
 /// Create a [`kube::Client`] for the given context name.
 ///
 /// If `context` is `None`, the default kubeconfig context is used.
+#[instrument(skip_all, fields(context))]
 pub async fn create_client(context: Option<&str>) -> Result<Client> {
+    debug!(
+        context = context.unwrap_or("<default>"),
+        "creating k8s client"
+    );
     let config = match context {
         Some(ctx) => {
             let options = KubeConfigOptions {
