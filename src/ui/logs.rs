@@ -2,6 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::app::{App, Focus, InputMode};
+use crate::ui::theme::Theme;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let title = match (&app.selected_pod, &app.selected_container) {
@@ -17,9 +18,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
+    let theme = app.theme();
     let border_color = match app.focus {
-        Focus::Logs => Color::Cyan,
-        _ => Color::DarkGray,
+        Focus::Logs => theme.border_focused,
+        _ => theme.border_unfocused,
     };
 
     let filtered_lines = app.filtered_log_lines();
@@ -38,12 +40,17 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .iter()
         .skip(scroll_offset)
         .take(inner_height)
-        .map(|line| {
-            if !app.search_query.is_empty() {
-                highlight_search(line, &app.search_query)
+        .enumerate()
+        .map(|(i, line)| {
+            let mut styled = if !app.search_query.is_empty() {
+                highlight_search(line, &app.search_query, theme)
             } else {
-                Line::from(colorize_log_line(line))
+                Line::from(colorize_log_line(line, theme))
+            };
+            if i % 2 == 1 {
+                styled = styled.style(Style::default().bg(theme.zebra_bg));
             }
+            styled
         })
         .collect();
 
@@ -67,6 +74,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
+    let theme = app.theme();
     let input_area = Rect {
         x: area.x + 1,
         y: area.y + area.height.saturating_sub(2),
@@ -74,25 +82,28 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
         height: 1,
     };
 
-    let input = Paragraph::new(format!("/{}", app.search_query))
-        .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray));
+    let input = Paragraph::new(format!("/{}", app.search_query)).style(
+        Style::default()
+            .fg(theme.search_fg)
+            .bg(theme.search_input_bg),
+    );
 
     frame.render_widget(input, input_area);
 }
 
-fn colorize_log_line(line: &str) -> Vec<Span<'_>> {
+fn colorize_log_line<'a>(line: &'a str, theme: &Theme) -> Vec<Span<'a>> {
     if line.contains("ERROR") || line.contains("error") {
-        vec![Span::styled(line, Style::default().fg(Color::Red))]
+        vec![Span::styled(line, Style::default().fg(theme.log_error))]
     } else if line.contains("WARN") || line.contains("warn") {
-        vec![Span::styled(line, Style::default().fg(Color::Yellow))]
+        vec![Span::styled(line, Style::default().fg(theme.log_warn))]
     } else if line.contains("DEBUG") || line.contains("debug") {
-        vec![Span::styled(line, Style::default().fg(Color::DarkGray))]
+        vec![Span::styled(line, Style::default().fg(theme.log_debug))]
     } else {
         vec![Span::raw(line)]
     }
 }
 
-fn highlight_search<'a>(line: &'a str, query: &str) -> Line<'a> {
+fn highlight_search<'a>(line: &'a str, query: &str, theme: &Theme) -> Line<'a> {
     let lower_line = line.to_lowercase();
     let lower_query = query.to_lowercase();
 
@@ -106,7 +117,9 @@ fn highlight_search<'a>(line: &'a str, query: &str) -> Line<'a> {
         let end = start + query.len();
         spans.push(Span::styled(
             &line[start..end],
-            Style::default().fg(Color::Black).bg(Color::Yellow),
+            Style::default()
+                .fg(theme.search_match_fg)
+                .bg(theme.search_match_bg),
         ));
         last_end = end;
     }
@@ -121,103 +134,99 @@ fn highlight_search<'a>(line: &'a str, query: &str) -> Line<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::theme::DARK;
 
     // -- colorize_log_line --------------------------------------------------
 
     #[test]
     fn test_colorize_error_line() {
-        let spans = colorize_log_line("2024-01-01 ERROR something broke");
+        let spans = colorize_log_line("2024-01-01 ERROR something broke", &DARK);
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].style.fg, Some(Color::Red),);
+        assert_eq!(spans[0].style.fg, Some(DARK.log_error));
     }
 
     #[test]
     fn test_colorize_warn_line() {
-        let spans = colorize_log_line("2024-01-01 WARN low memory");
+        let spans = colorize_log_line("2024-01-01 WARN low memory", &DARK);
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].style.fg, Some(Color::Yellow));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_warn));
     }
 
     #[test]
     fn test_colorize_debug_line() {
-        let spans = colorize_log_line("DEBUG: detailed trace info");
+        let spans = colorize_log_line("DEBUG: detailed trace info", &DARK);
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].style.fg, Some(Color::DarkGray));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_debug));
     }
 
     #[test]
     fn test_colorize_info_line_is_unstyled() {
-        let spans = colorize_log_line("INFO: server started on port 8080");
+        let spans = colorize_log_line("INFO: server started on port 8080", &DARK);
         assert_eq!(spans.len(), 1);
-        // INFO lines use Span::raw which has default (no fg color) style
         assert_eq!(spans[0].style.fg, None);
     }
 
     #[test]
     fn test_colorize_lowercase_error() {
-        let spans = colorize_log_line("an error occurred in module");
-        assert_eq!(spans[0].style.fg, Some(Color::Red));
+        let spans = colorize_log_line("an error occurred in module", &DARK);
+        assert_eq!(spans[0].style.fg, Some(DARK.log_error));
     }
 
     // -- highlight_search ---------------------------------------------------
 
     #[test]
     fn test_highlight_single_match() {
-        let line = highlight_search("hello world", "world");
+        let line = highlight_search("hello world", "world", &DARK);
         assert_eq!(line.spans.len(), 2);
         assert_eq!(line.spans[0].content, "hello ");
         assert_eq!(line.spans[1].content, "world");
-        assert_eq!(line.spans[1].style.bg, Some(Color::Yellow));
-        assert_eq!(line.spans[1].style.fg, Some(Color::Black));
+        assert_eq!(line.spans[1].style.bg, Some(DARK.search_match_bg));
+        assert_eq!(line.spans[1].style.fg, Some(DARK.search_match_fg));
     }
 
     #[test]
     fn test_highlight_multiple_matches() {
-        let line = highlight_search("error in error handler", "error");
-        // Should produce: ["", "error", " in ", "error", " handler"]
-        // But first span is empty so it's skipped (start == last_end for first match at pos 0)
+        let line = highlight_search("error in error handler", "error", &DARK);
         let texts: Vec<&str> = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["error", " in ", "error", " handler"]);
     }
 
     #[test]
     fn test_highlight_case_insensitive() {
-        let line = highlight_search("ERROR: fatal", "error");
-        // "ERROR" should be highlighted
+        let line = highlight_search("ERROR: fatal", "error", &DARK);
         assert_eq!(line.spans[0].content, "ERROR");
-        assert_eq!(line.spans[0].style.bg, Some(Color::Yellow));
+        assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
     }
 
     #[test]
     fn test_highlight_no_match() {
-        let line = highlight_search("hello world", "xyz");
+        let line = highlight_search("hello world", "xyz", &DARK);
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].content, "hello world");
-        // No highlight styling
         assert_eq!(line.spans[0].style.bg, None);
     }
 
     #[test]
     fn test_highlight_match_at_start() {
-        let line = highlight_search("abc def", "abc");
+        let line = highlight_search("abc def", "abc", &DARK);
         let texts: Vec<&str> = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["abc", " def"]);
-        assert_eq!(line.spans[0].style.bg, Some(Color::Yellow));
+        assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
     }
 
     #[test]
     fn test_highlight_match_at_end() {
-        let line = highlight_search("foo bar", "bar");
+        let line = highlight_search("foo bar", "bar", &DARK);
         let texts: Vec<&str> = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["foo ", "bar"]);
-        assert_eq!(line.spans[1].style.bg, Some(Color::Yellow));
+        assert_eq!(line.spans[1].style.bg, Some(DARK.search_match_bg));
     }
 
     #[test]
     fn test_highlight_entire_line() {
-        let line = highlight_search("test", "test");
+        let line = highlight_search("test", "test", &DARK);
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].content, "test");
-        assert_eq!(line.spans[0].style.bg, Some(Color::Yellow));
+        assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
     }
 }

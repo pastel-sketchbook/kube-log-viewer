@@ -4,6 +4,7 @@ use ratatui::widgets::{Block, Borders, List, ListItem};
 use crate::app::{App, Focus};
 
 pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
+    let theme = app.theme();
     let title = format!(" Pods ({}) ", app.pods.len());
 
     let items: Vec<ListItem> = app
@@ -11,27 +12,27 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|pod| {
             let (status_icon, status_color) = match pod.status.as_str() {
-                "Running" => ("●", Color::Green),
-                "Pending" => ("◌", Color::Yellow),
-                "Succeeded" => ("✓", Color::Blue),
-                "Failed" => ("✗", Color::Red),
-                _ => ("?", Color::DarkGray),
+                "Running" => ("●", theme.status_running),
+                "Pending" => ("◌", theme.status_pending),
+                "Succeeded" => ("✓", theme.status_succeeded),
+                "Failed" => ("✗", theme.status_failed),
+                _ => ("?", theme.status_unknown),
             };
 
             ListItem::new(Line::from(vec![
                 Span::styled(format!("{status_icon} "), Style::default().fg(status_color)),
-                Span::styled(pod.name.as_str(), Style::default().fg(Color::White)),
+                Span::styled(pod.name.as_str(), Style::default().fg(theme.fg)),
                 Span::styled(
                     format!("  {} R:{}", pod.ready, pod.restarts),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(theme.muted),
                 ),
             ]))
         })
         .collect();
 
     let border_color = match app.focus {
-        Focus::Pods => Color::Cyan,
-        _ => Color::DarkGray,
+        Focus::Pods => theme.border_focused,
+        _ => theme.border_unfocused,
     };
 
     let list = List::new(items)
@@ -43,7 +44,7 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(theme.highlight_bg)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");

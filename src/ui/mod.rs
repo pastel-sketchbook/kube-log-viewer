@@ -3,6 +3,7 @@ pub mod logs;
 pub mod pods;
 pub mod popup;
 pub mod statusbar;
+pub mod theme;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
@@ -24,11 +25,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     header::render(frame, app, chunks[0]);
 
     // Main content: pod list (left) + log viewer (right)
+    let (pod_pct, log_pct) = if app.wide_logs { (10, 90) } else { (25, 75) };
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(25), // pod list
-            Constraint::Percentage(75), // log viewer
+            Constraint::Percentage(pod_pct), // pod list
+            Constraint::Percentage(log_pct), // log viewer
         ])
         .split(chunks[1]);
 
@@ -41,7 +43,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         popup::render(frame, app);
     }
     if app.show_help {
-        render_help(frame);
+        render_help(frame, app);
     }
 }
 
@@ -49,9 +51,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 // Help overlay
 // ---------------------------------------------------------------------------
 
-fn render_help(frame: &mut Frame) {
+fn render_help(frame: &mut Frame, app: &App) {
     let area = centered_rect(60, 70, frame.area());
     frame.render_widget(Clear, area);
+
+    let theme = app.theme();
 
     let help_text = vec![
         "Keybindings:",
@@ -71,7 +75,9 @@ fn render_help(frame: &mut Frame) {
         "    s          Switch container",
         "    /          Search/filter logs",
         "    f          Toggle follow mode",
-        "    w          Toggle line wrap",
+        "    w          Toggle wide log view",
+        "    W          Toggle line wrap",
+        "    t          Cycle theme",
         "",
         "  General:",
         "    ?          Toggle this help",
@@ -85,9 +91,9 @@ fn render_help(frame: &mut Frame) {
             Block::default()
                 .title(" Help ")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(theme.popup_border)),
         )
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(theme.fg));
 
     frame.render_widget(paragraph, area);
 }

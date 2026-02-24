@@ -11,6 +11,7 @@ use tracing::{debug, error, info};
 use crate::event::AppEvent;
 use crate::k8s;
 use crate::ui;
+use crate::ui::theme::{THEMES, Theme};
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -53,6 +54,7 @@ pub struct App {
     pub log_scroll_offset: usize,
     pub follow_mode: bool,
     pub wrap_lines: bool,
+    pub wide_logs: bool,
     pub input_mode: InputMode,
     pub search_query: String,
     pub show_help: bool,
@@ -66,6 +68,9 @@ pub struct App {
     pub selected_pod: Option<String>,
     pub selected_container: Option<String>,
     pub containers: Vec<String>,
+
+    // Theme
+    pub theme_index: usize,
 
     // Auth state
     pub az_login_in_progress: bool,
@@ -94,6 +99,7 @@ impl App {
             log_scroll_offset: 0,
             follow_mode: true,
             wrap_lines: false,
+            wide_logs: false,
             input_mode: InputMode::Normal,
             search_query: String::new(),
             show_help: false,
@@ -105,6 +111,8 @@ impl App {
             selected_pod: None,
             selected_container: None,
             containers: Vec::new(),
+
+            theme_index: 0,
 
             az_login_in_progress: false,
 
@@ -190,7 +198,9 @@ impl App {
                 self.search_query.clear();
             }
             KeyCode::Char('f') => self.follow_mode = !self.follow_mode,
-            KeyCode::Char('w') => self.wrap_lines = !self.wrap_lines,
+            KeyCode::Char('w') => self.wide_logs = !self.wide_logs,
+            KeyCode::Char('W') => self.wrap_lines = !self.wrap_lines,
+            KeyCode::Char('t') => self.cycle_theme(),
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Pods => Focus::Logs,
@@ -501,6 +511,14 @@ impl App {
 
     // -- Helpers ------------------------------------------------------------
 
+    pub fn theme(&self) -> &Theme {
+        &THEMES[self.theme_index]
+    }
+
+    pub fn cycle_theme(&mut self) {
+        self.theme_index = (self.theme_index + 1) % THEMES.len();
+    }
+
     pub fn filtered_log_lines(&self) -> Vec<&str> {
         match self.search_query.as_str() {
             "" => self.log_lines.iter().map(|s| s.as_str()).collect(),
@@ -770,12 +788,22 @@ mod tests {
     }
 
     #[test]
-    fn test_w_toggles_wrap() {
+    fn test_w_toggles_wide_logs() {
+        let mut app = test_app();
+        assert!(!app.wide_logs);
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(app.wide_logs);
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(!app.wide_logs);
+    }
+
+    #[test]
+    fn test_shift_w_toggles_wrap() {
         let mut app = test_app();
         assert!(!app.wrap_lines);
-        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Char('W')));
         assert!(app.wrap_lines);
-        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Char('W')));
         assert!(!app.wrap_lines);
     }
 
