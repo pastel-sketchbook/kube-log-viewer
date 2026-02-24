@@ -13,6 +13,45 @@ pub struct PodInfo {
     pub containers: Vec<String>,
 }
 
+impl PodInfo {
+    /// Extract structured pod info from a raw K8s `Pod` object.
+    pub fn from_pod(pod: &Pod) -> Self {
+        let name = pod.metadata.name.clone().unwrap_or_default();
+
+        let status = pod
+            .status
+            .as_ref()
+            .and_then(|s| s.phase.clone())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        let containers: Vec<String> = pod
+            .spec
+            .as_ref()
+            .map(|spec| spec.containers.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default();
+
+        let (ready_count, total_count, restarts) = pod
+            .status
+            .as_ref()
+            .map(|s| {
+                let statuses = s.container_statuses.as_deref().unwrap_or_default();
+                let ready = statuses.iter().filter(|cs| cs.ready).count();
+                let total = statuses.len();
+                let restarts: i32 = statuses.iter().map(|cs| cs.restart_count).sum();
+                (ready, total, restarts)
+            })
+            .unwrap_or((0, containers.len(), 0));
+
+        PodInfo {
+            name,
+            status,
+            ready: format!("{}/{}", ready_count, total_count),
+            restarts,
+            containers,
+        }
+    }
+}
+
 /// List pods in the given namespace and context, returning structured info.
 pub async fn list_pods(context: &str, namespace: &str) -> Result<Vec<PodInfo>> {
     let client = create_client(Some(context)).await?;
@@ -22,45 +61,176 @@ pub async fn list_pods(context: &str, namespace: &str) -> Result<Vec<PodInfo>> {
         .await
         .with_context(|| format!("failed to list pods in namespace '{namespace}'"))?;
 
-    let pods: Vec<PodInfo> = pod_list
-        .items
-        .iter()
-        .map(|pod| {
-            let name = pod.metadata.name.clone().unwrap_or_default();
-
-            let status = pod
-                .status
-                .as_ref()
-                .and_then(|s| s.phase.clone())
-                .unwrap_or_else(|| "Unknown".to_string());
-
-            let containers: Vec<String> = pod
-                .spec
-                .as_ref()
-                .map(|spec| spec.containers.iter().map(|c| c.name.clone()).collect())
-                .unwrap_or_default();
-
-            let (ready_count, total_count, restarts) = pod
-                .status
-                .as_ref()
-                .map(|s| {
-                    let statuses = s.container_statuses.as_deref().unwrap_or_default();
-                    let ready = statuses.iter().filter(|cs| cs.ready).count();
-                    let total = statuses.len();
-                    let restarts: i32 = statuses.iter().map(|cs| cs.restart_count).sum();
-                    (ready, total, restarts)
-                })
-                .unwrap_or((0, containers.len(), 0));
-
-            PodInfo {
-                name,
-                status,
-                ready: format!("{}/{}", ready_count, total_count),
-                restarts,
-                containers,
-            }
-        })
-        .collect();
+    let pods: Vec<PodInfo> = pod_list.items.iter().map(PodInfo::from_pod).collect();
 
     Ok(pods)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::{Container, ContainerStatus, PodSpec, PodStatus};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    fn make_pod(
+        name: &str,
+        phase: Option<&str>,
+        container_names: Vec<&str>,
+        container_statuses: Vec<(bool, i32)>, // (ready, restart_count)
+    ) -> Pod {
+        let spec = if container_names.is_empty() {
+            None
+        } else {
+            Some(PodSpec {
+                containers: container_names
+                    .iter()
+                    .map(|n| Container {
+                        name: n.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            })
+        };
+
+        let status = if phase.is_some() || !container_statuses.is_empty() {
+            Some(PodStatus {
+                phase: phase.map(|p| p.to_string()),
+                container_statuses: if container_statuses.is_empty() {
+                    None
+                } else {
+                    Some(
+                        container_statuses
+                            .iter()
+                            .enumerate()
+                            .map(|(i, (ready, restarts))| ContainerStatus {
+                                name: container_names
+                                    .get(i)
+                                    .unwrap_or(&"unknown")
+                                    .to_string(),
+                                ready: *ready,
+                                restart_count: *restarts,
+                                ..Default::default()
+                            })
+                            .collect(),
+                    )
+                },
+                ..Default::default()
+            })
+        } else {
+            None
+        };
+
+        Pod {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec,
+            status,
+        }
+    }
+
+    #[test]
+    fn test_running_pod_with_two_ready_containers() {
+        let pod = make_pod(
+            "nginx-abc123",
+            Some("Running"),
+            vec!["nginx", "sidecar"],
+            vec![(true, 0), (true, 3)],
+        );
+        let info = PodInfo::from_pod(&pod);
+
+        assert_eq!(info.name, "nginx-abc123");
+        assert_eq!(info.status, "Running");
+        assert_eq!(info.ready, "2/2");
+        assert_eq!(info.restarts, 3);
+        assert_eq!(info.containers, vec!["nginx", "sidecar"]);
+    }
+
+    #[test]
+    fn test_pending_pod_with_no_ready_containers() {
+        let pod = make_pod(
+            "app-xyz789",
+            Some("Pending"),
+            vec!["app"],
+            vec![(false, 0)],
+        );
+        let info = PodInfo::from_pod(&pod);
+
+        assert_eq!(info.name, "app-xyz789");
+        assert_eq!(info.status, "Pending");
+        assert_eq!(info.ready, "0/1");
+        assert_eq!(info.restarts, 0);
+        assert_eq!(info.containers, vec!["app"]);
+    }
+
+    #[test]
+    fn test_pod_with_missing_status() {
+        let pod = Pod {
+            metadata: ObjectMeta {
+                name: Some("ghost-pod".to_string()),
+                ..Default::default()
+            },
+            spec: Some(PodSpec {
+                containers: vec![Container {
+                    name: "ghost".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            status: None,
+        };
+        let info = PodInfo::from_pod(&pod);
+
+        assert_eq!(info.name, "ghost-pod");
+        assert_eq!(info.status, "Unknown");
+        // No status => ready defaults to 0/container_count
+        assert_eq!(info.ready, "0/1");
+        assert_eq!(info.restarts, 0);
+    }
+
+    #[test]
+    fn test_pod_with_missing_name() {
+        let pod = Pod {
+            metadata: ObjectMeta {
+                name: None,
+                ..Default::default()
+            },
+            spec: None,
+            status: None,
+        };
+        let info = PodInfo::from_pod(&pod);
+
+        assert_eq!(info.name, "");
+        assert_eq!(info.status, "Unknown");
+        assert_eq!(info.ready, "0/0");
+        assert_eq!(info.restarts, 0);
+        assert!(info.containers.is_empty());
+    }
+
+    #[test]
+    fn test_pod_partial_readiness() {
+        let pod = make_pod(
+            "mixed-pod",
+            Some("Running"),
+            vec!["web", "worker", "sidecar"],
+            vec![(true, 1), (false, 5), (true, 0)],
+        );
+        let info = PodInfo::from_pod(&pod);
+
+        assert_eq!(info.ready, "2/3");
+        assert_eq!(info.restarts, 6);
+        assert_eq!(info.containers.len(), 3);
+    }
+
+    #[test]
+    fn test_failed_pod() {
+        let pod = make_pod("crash-pod", Some("Failed"), vec!["app"], vec![(false, 42)]);
+        let info = PodInfo::from_pod(&pod);
+
+        assert_eq!(info.status, "Failed");
+        assert_eq!(info.ready, "0/1");
+        assert_eq!(info.restarts, 42);
+    }
 }

@@ -586,3 +586,373 @@ impl App {
         });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn ctrl_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    fn test_app() -> App {
+        let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
+        App::new(tx)
+    }
+
+    fn test_app_with_pods() -> App {
+        let mut app = test_app();
+        app.pods = vec![
+            k8s::pods::PodInfo {
+                name: "pod-a".to_string(),
+                status: "Running".to_string(),
+                ready: "1/1".to_string(),
+                restarts: 0,
+                containers: vec!["main".to_string()],
+            },
+            k8s::pods::PodInfo {
+                name: "pod-b".to_string(),
+                status: "Running".to_string(),
+                ready: "2/2".to_string(),
+                restarts: 1,
+                containers: vec!["web".to_string(), "sidecar".to_string()],
+            },
+        ];
+        app.pod_list_state.select(Some(0));
+        app
+    }
+
+    // -- Quit ---------------------------------------------------------------
+
+    #[test]
+    fn test_q_quits() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('q')));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_ctrl_c_quits() {
+        let mut app = test_app();
+        app.handle_key(ctrl_key(KeyCode::Char('c')));
+        assert!(app.should_quit);
+    }
+
+    // -- Help ---------------------------------------------------------------
+
+    #[test]
+    fn test_question_mark_toggles_help() {
+        let mut app = test_app();
+        assert!(!app.show_help);
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(app.show_help);
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(!app.show_help);
+    }
+
+    // -- Focus switching ----------------------------------------------------
+
+    #[test]
+    fn test_tab_switches_focus() {
+        let mut app = test_app();
+        assert_eq!(app.focus, Focus::Pods);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Logs);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Pods);
+    }
+
+    // -- Follow / Wrap toggles ----------------------------------------------
+
+    #[test]
+    fn test_f_toggles_follow_mode() {
+        let mut app = test_app();
+        assert!(app.follow_mode);
+        app.handle_key(key(KeyCode::Char('f')));
+        assert!(!app.follow_mode);
+        app.handle_key(key(KeyCode::Char('f')));
+        assert!(app.follow_mode);
+    }
+
+    #[test]
+    fn test_w_toggles_wrap() {
+        let mut app = test_app();
+        assert!(!app.wrap_lines);
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(app.wrap_lines);
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(!app.wrap_lines);
+    }
+
+    // -- Search mode --------------------------------------------------------
+
+    #[test]
+    fn test_slash_enters_search_mode() {
+        let mut app = test_app();
+        assert_eq!(app.input_mode, InputMode::Normal);
+        app.handle_key(key(KeyCode::Char('/')));
+        assert_eq!(app.input_mode, InputMode::Search);
+    }
+
+    #[test]
+    fn test_search_typing_and_backspace() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::Char('r')));
+        app.handle_key(key(KeyCode::Char('r')));
+        assert_eq!(app.search_query, "err");
+
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.search_query, "er");
+    }
+
+    #[test]
+    fn test_esc_exits_search_mode() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('x')));
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.input_mode, InputMode::Normal);
+        // Query is preserved after Esc from search input
+        assert_eq!(app.search_query, "x");
+    }
+
+    #[test]
+    fn test_enter_confirms_search() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(key(KeyCode::Char('a')));
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.input_mode, InputMode::Normal);
+        assert_eq!(app.search_query, "a");
+    }
+
+    #[test]
+    fn test_esc_clears_search_query_in_normal_mode() {
+        let mut app = test_app();
+        app.search_query = "something".to_string();
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.search_query.is_empty());
+    }
+
+    // -- Pod navigation -----------------------------------------------------
+
+    #[test]
+    fn test_j_navigates_down_in_pod_list() {
+        let mut app = test_app_with_pods();
+        assert_eq!(app.pod_list_state.selected(), Some(0));
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.pod_list_state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_k_navigates_up_in_pod_list() {
+        let mut app = test_app_with_pods();
+        app.pod_list_state.select(Some(1));
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.pod_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_k_does_not_go_below_zero() {
+        let mut app = test_app_with_pods();
+        app.pod_list_state.select(Some(0));
+        app.handle_key(key(KeyCode::Char('k')));
+        assert_eq!(app.pod_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_j_does_not_exceed_pod_count() {
+        let mut app = test_app_with_pods();
+        app.pod_list_state.select(Some(1));
+        app.handle_key(key(KeyCode::Char('j')));
+        assert_eq!(app.pod_list_state.selected(), Some(1));
+    }
+
+    // -- Log scroll ---------------------------------------------------------
+
+    #[test]
+    fn test_scroll_up_disables_follow() {
+        let mut app = test_app();
+        app.focus = Focus::Logs;
+        app.follow_mode = true;
+        app.log_scroll_offset = 5;
+        app.handle_key(key(KeyCode::Char('k')));
+        assert!(!app.follow_mode);
+        assert_eq!(app.log_scroll_offset, 4);
+    }
+
+    #[test]
+    fn test_g_scrolls_to_top() {
+        let mut app = test_app();
+        app.focus = Focus::Logs;
+        app.log_scroll_offset = 50;
+        app.follow_mode = true;
+        app.handle_key(key(KeyCode::Char('g')));
+        assert_eq!(app.log_scroll_offset, 0);
+        assert!(!app.follow_mode);
+    }
+
+    #[test]
+    fn test_shift_g_scrolls_to_bottom_and_enables_follow() {
+        let mut app = test_app();
+        app.focus = Focus::Logs;
+        app.follow_mode = false;
+        app.log_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        app.handle_key(key(KeyCode::Char('G')));
+        assert!(app.follow_mode);
+    }
+
+    // -- Popup keys ---------------------------------------------------------
+
+    #[test]
+    fn test_n_opens_namespace_popup() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('n')));
+        assert_eq!(app.popup, Some(PopupKind::Namespaces));
+    }
+
+    #[test]
+    fn test_c_opens_context_popup() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('c')));
+        assert_eq!(app.popup, Some(PopupKind::Contexts));
+    }
+
+    #[test]
+    fn test_s_opens_container_popup_when_containers_exist() {
+        let mut app = test_app();
+        app.containers = vec!["main".to_string()];
+        app.handle_key(key(KeyCode::Char('s')));
+        assert_eq!(app.popup, Some(PopupKind::Containers));
+    }
+
+    #[test]
+    fn test_s_does_nothing_without_containers() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('s')));
+        assert!(app.popup.is_none());
+    }
+
+    #[test]
+    fn test_esc_closes_popup() {
+        let mut app = test_app();
+        app.popup = Some(PopupKind::Namespaces);
+        app.handle_key(key(KeyCode::Esc));
+        assert!(app.popup.is_none());
+    }
+
+    // -- Filtered log lines -------------------------------------------------
+
+    #[test]
+    fn test_filtered_log_lines_no_query() {
+        let mut app = test_app();
+        app.log_lines = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_with_query() {
+        let mut app = test_app();
+        app.log_lines = vec![
+            "INFO: started".to_string(),
+            "ERROR: failed".to_string(),
+            "INFO: completed".to_string(),
+        ];
+        app.search_query = "error".to_string();
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered, vec!["ERROR: failed"]);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_case_insensitive() {
+        let mut app = test_app();
+        app.log_lines = vec!["Error occurred".to_string(), "all good".to_string()];
+        app.search_query = "ERROR".to_string();
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered, vec!["Error occurred"]);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_no_match() {
+        let mut app = test_app();
+        app.log_lines = vec!["hello world".to_string()];
+        app.search_query = "xyz".to_string();
+        let filtered = app.filtered_log_lines();
+        assert!(filtered.is_empty());
+    }
+
+    // -- handle_app_event ---------------------------------------------------
+
+    #[test]
+    fn test_pods_updated_selects_first() {
+        let mut app = test_app();
+        assert!(app.pod_list_state.selected().is_none());
+
+        app.handle_app_event(AppEvent::PodsUpdated(vec![k8s::pods::PodInfo {
+            name: "test-pod".to_string(),
+            status: "Running".to_string(),
+            ready: "1/1".to_string(),
+            restarts: 0,
+            containers: vec!["app".to_string()],
+        }]));
+
+        assert_eq!(app.pods.len(), 1);
+        assert_eq!(app.pod_list_state.selected(), Some(0));
+    }
+
+    #[test]
+    fn test_namespaces_loaded_preserves_current_if_present() {
+        let mut app = test_app();
+        app.current_namespace = "kube-system".to_string();
+        app.handle_app_event(AppEvent::NamespacesLoaded(vec![
+            "default".to_string(),
+            "kube-system".to_string(),
+        ]));
+        assert_eq!(app.current_namespace, "kube-system");
+    }
+
+    #[test]
+    fn test_namespaces_loaded_falls_back_to_first() {
+        let mut app = test_app();
+        app.current_namespace = "nonexistent".to_string();
+        app.handle_app_event(AppEvent::NamespacesLoaded(vec![
+            "default".to_string(),
+            "production".to_string(),
+        ]));
+        assert_eq!(app.current_namespace, "default");
+    }
+
+    #[test]
+    fn test_log_line_appended() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::LogLine("hello".to_string()));
+        assert_eq!(app.log_lines, vec!["hello"]);
+    }
+
+    #[test]
+    fn test_error_shown_in_log_panel() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::Error("connection refused".to_string()));
+        assert_eq!(app.log_lines, vec!["[ERROR] connection refused"]);
+    }
+
+    #[test]
+    fn test_log_line_cap() {
+        let mut app = test_app();
+        for i in 0..50_001 {
+            app.log_lines.push(format!("line {i}"));
+        }
+        app.handle_app_event(AppEvent::LogLine("overflow".to_string()));
+        // After adding one more (total 50002), drain 10000, leaving 40002
+        assert!(app.log_lines.len() <= 50_001);
+        assert!(app.log_lines.len() > 40_000);
+    }
+}

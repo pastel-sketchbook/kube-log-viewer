@@ -49,14 +49,14 @@ Implementation roadmap organized in phases. Each phase builds on the previous.
 
 ## Phase 6: Polish & Testing
 
-- [ ] Unit tests: `PodInfo` extraction from K8s API objects
-- [ ] Unit tests: log filtering and search highlight logic
-- [ ] Unit tests: key handling state transitions
+- [x] Unit tests: `PodInfo` extraction from K8s API objects
+- [x] Unit tests: log filtering and search highlight logic
+- [x] Unit tests: key handling state transitions
 - [ ] Integration test: full event loop with mock K8s responses
 - [x] `cargo clippy -- -D warnings` passes clean
 - [x] `cargo test` passes clean
-- [ ] Error handling audit: no `unwrap()` in non-test code
-- [ ] Terminal restoration audit: ensure cleanup on panic (catch_unwind or panic hook)
+- [x] Error handling audit: no `unwrap()` in non-test code
+- [x] Terminal restoration audit: ensure cleanup on panic (catch_unwind or panic hook)
 - [ ] README: add screenshot / demo GIF
 
 ## Future (Post v0.1)
