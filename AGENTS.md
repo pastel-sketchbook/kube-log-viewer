@@ -83,6 +83,7 @@ kube-log-viewer/
 - **Graceful Degradation**: If a K8s call fails, show the error in the UI rather than crashing. The TUI must remain interactive.
 - **Terminal Safety**: Always restore terminal state on exit, including on panic. Use a panic hook or `catch_unwind` wrapper.
 - **Testing**: Unit tests for state transitions, pod info extraction, log filtering. Integration tests for event handling.
+- **Pre-commit Gate**: Always run `task check:all && task install` before committing. Only commit if both pass.
 
 # COMMIT CONVENTIONS
 
@@ -132,6 +133,8 @@ Use the following prefixes:
 - Does `cargo test` pass?
 - Are new features covered by tests?
 - Is the terminal properly restored on all exit paths?
+- Does the code prefer pattern matching (`match`) over `if-else` chains?
+- Are GoF design patterns applied where they reduce lines of code (not aggressively)?
 
 # OUT OF SCOPE / ANTI-PATTERNS
 

@@ -17,11 +17,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         String::new()
     };
 
-    let is_focused = app.focus == Focus::Logs;
-    let border_color = if is_focused {
-        Color::Cyan
-    } else {
-        Color::DarkGray
+    let border_color = match app.focus {
+        Focus::Logs => Color::Cyan,
+        _ => Color::DarkGray,
     };
 
     let filtered_lines = app.filtered_log_lines();
@@ -165,7 +163,7 @@ mod tests {
 
     #[test]
     fn test_highlight_single_match() {
-        let line = Line::from(highlight_search("hello world", "world"));
+        let line = highlight_search("hello world", "world");
         assert_eq!(line.spans.len(), 2);
         assert_eq!(line.spans[0].content, "hello ");
         assert_eq!(line.spans[1].content, "world");

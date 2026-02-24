@@ -104,10 +104,7 @@ mod tests {
                             .iter()
                             .enumerate()
                             .map(|(i, (ready, restarts))| ContainerStatus {
-                                name: container_names
-                                    .get(i)
-                                    .unwrap_or(&"unknown")
-                                    .to_string(),
+                                name: container_names.get(i).unwrap_or(&"unknown").to_string(),
                                 ready: *ready,
                                 restart_count: *restarts,
                                 ..Default::default()
@@ -150,12 +147,7 @@ mod tests {
 
     #[test]
     fn test_pending_pod_with_no_ready_containers() {
-        let pod = make_pod(
-            "app-xyz789",
-            Some("Pending"),
-            vec!["app"],
-            vec![(false, 0)],
-        );
+        let pod = make_pod("app-xyz789", Some("Pending"), vec!["app"], vec![(false, 0)]);
         let info = PodInfo::from_pod(&pod);
 
         assert_eq!(info.name, "app-xyz789");

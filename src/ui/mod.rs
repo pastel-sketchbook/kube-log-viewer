@@ -16,7 +16,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // header
-            Constraint::Min(5),   // main body
+            Constraint::Min(5),    // main body
             Constraint::Length(1), // status bar
         ])
         .split(frame.area());

@@ -11,7 +11,7 @@ pub async fn list_namespaces(context: &str) -> Result<Vec<String>> {
     let ns_list = ns_api
         .list(&Default::default())
         .await
-        .context("failed to list namespaces")?;
+        .with_context(|| format!("failed to list namespaces in context '{context}'"))?;
 
     let mut namespaces: Vec<String> = ns_list
         .items

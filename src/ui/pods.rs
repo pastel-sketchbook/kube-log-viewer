@@ -10,20 +10,12 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         .pods
         .iter()
         .map(|pod| {
-            let status_color = match pod.status.as_str() {
-                "Running" => Color::Green,
-                "Pending" => Color::Yellow,
-                "Succeeded" => Color::Blue,
-                "Failed" => Color::Red,
-                _ => Color::DarkGray,
-            };
-
-            let status_icon = match pod.status.as_str() {
-                "Running" => "●",
-                "Pending" => "◌",
-                "Succeeded" => "✓",
-                "Failed" => "✗",
-                _ => "?",
+            let (status_icon, status_color) = match pod.status.as_str() {
+                "Running" => ("●", Color::Green),
+                "Pending" => ("◌", Color::Yellow),
+                "Succeeded" => ("✓", Color::Blue),
+                "Failed" => ("✗", Color::Red),
+                _ => ("?", Color::DarkGray),
             };
 
             ListItem::new(Line::from(vec![
@@ -37,11 +29,9 @@ pub fn render(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
 
-    let is_focused = app.focus == Focus::Pods;
-    let border_color = if is_focused {
-        Color::Cyan
-    } else {
-        Color::DarkGray
+    let border_color = match app.focus {
+        Focus::Pods => Color::Cyan,
+        _ => Color::DarkGray,
     };
 
     let list = List::new(items)

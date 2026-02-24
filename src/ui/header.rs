@@ -4,10 +4,9 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::app::App;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let context = if app.current_context.is_empty() {
-        "loading..."
-    } else {
-        &app.current_context
+    let context = match app.current_context.as_str() {
+        "" => "loading...",
+        ctx => ctx,
     };
 
     let namespace = &app.current_namespace;

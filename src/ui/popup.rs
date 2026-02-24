@@ -3,61 +3,46 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 
 use crate::app::{App, PopupKind};
 
+/// Build styled list items, highlighting the currently-selected value.
+fn styled_items<'a>(
+    items: &'a [String],
+    current: Option<&str>,
+    highlight: Color,
+) -> Vec<ListItem<'a>> {
+    items
+        .iter()
+        .map(|item| {
+            let style = match current {
+                Some(c) if c == item.as_str() => {
+                    Style::default().fg(highlight).add_modifier(Modifier::BOLD)
+                }
+                _ => Style::default().fg(Color::White),
+            };
+            ListItem::new(Span::styled(item.as_str(), style))
+        })
+        .collect()
+}
+
 pub fn render(frame: &mut Frame, app: &mut App) {
     let Some(kind) = app.popup else { return };
 
     let (title, items) = match kind {
-        PopupKind::Namespaces => {
-            let items: Vec<ListItem> = app
-                .namespaces
-                .iter()
-                .map(|ns| {
-                    let style = if ns == &app.current_namespace {
-                        Style::default()
-                            .fg(Color::Green)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    ListItem::new(Span::styled(ns.as_str(), style))
-                })
-                .collect();
-            (" Namespaces ", items)
-        }
-        PopupKind::Contexts => {
-            let items: Vec<ListItem> = app
-                .contexts
-                .iter()
-                .map(|ctx| {
-                    let style = if ctx == &app.current_context {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    ListItem::new(Span::styled(ctx.as_str(), style))
-                })
-                .collect();
-            (" Contexts ", items)
-        }
-        PopupKind::Containers => {
-            let items: Vec<ListItem> = app
-                .containers
-                .iter()
-                .map(|c| {
-                    let style = if app.selected_container.as_deref() == Some(c.as_str()) {
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    ListItem::new(Span::styled(c.as_str(), style))
-                })
-                .collect();
-            (" Containers ", items)
-        }
+        PopupKind::Namespaces => (
+            " Namespaces ",
+            styled_items(&app.namespaces, Some(&app.current_namespace), Color::Green),
+        ),
+        PopupKind::Contexts => (
+            " Contexts ",
+            styled_items(&app.contexts, Some(&app.current_context), Color::Cyan),
+        ),
+        PopupKind::Containers => (
+            " Containers ",
+            styled_items(
+                &app.containers,
+                app.selected_container.as_deref(),
+                Color::Yellow,
+            ),
+        ),
     };
 
     let area = super::centered_rect(40, 50, frame.area());

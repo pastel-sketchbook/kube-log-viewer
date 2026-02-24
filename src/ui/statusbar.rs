@@ -4,8 +4,8 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, InputMode};
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
-    let status = if app.input_mode == InputMode::Search {
-        Line::from(vec![
+    let status = match app.input_mode {
+        InputMode::Search => Line::from(vec![
             Span::styled(" /", Style::default().fg(Color::Yellow)),
             Span::styled(
                 app.search_query.as_str(),
@@ -16,9 +16,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(" confirm  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Esc", Style::default().fg(Color::Cyan)),
             Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-        ])
-    } else {
-        Line::from(vec![
+        ]),
+        InputMode::Normal => Line::from(vec![
             Span::styled(" ↑↓", Style::default().fg(Color::Cyan)),
             Span::styled(" nav  ", Style::default().fg(Color::DarkGray)),
             Span::styled("Enter", Style::default().fg(Color::Cyan)),
@@ -39,7 +38,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
             Span::styled("q", Style::default().fg(Color::Cyan)),
             Span::styled(" quit", Style::default().fg(Color::DarkGray)),
-        ])
+        ]),
     };
 
     let paragraph = Paragraph::new(status).style(Style::default().bg(Color::Rgb(30, 30, 30)));

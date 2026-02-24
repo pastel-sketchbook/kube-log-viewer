@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ratatui::prelude::*;
@@ -120,7 +120,9 @@ impl App {
         let mut event_stream = EventStream::new();
 
         loop {
-            terminal.draw(|f| ui::render(f, &mut app))?;
+            terminal
+                .draw(|f| ui::render(f, &mut app))
+                .context("failed to render frame")?;
 
             tokio::select! {
                 maybe_event = event_stream.next() => {
@@ -161,25 +163,21 @@ impl App {
             return;
         }
 
-        if self.popup.is_some() {
-            self.handle_popup_key(key);
-            return;
+        match (self.popup.is_some(), self.input_mode) {
+            (true, _) => self.handle_popup_key(key),
+            (_, InputMode::Search) => self.handle_search_key(key),
+            _ => self.handle_normal_key(key),
         }
+    }
 
-        if self.input_mode == InputMode::Search {
-            self.handle_search_key(key);
-            return;
-        }
-
+    fn handle_normal_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Char('?') => self.show_help = !self.show_help,
             KeyCode::Char('n') => self.open_popup(PopupKind::Namespaces),
             KeyCode::Char('c') => self.open_popup(PopupKind::Contexts),
-            KeyCode::Char('s') => {
-                if !self.containers.is_empty() {
-                    self.open_popup(PopupKind::Containers);
-                }
+            KeyCode::Char('s') if !self.containers.is_empty() => {
+                self.open_popup(PopupKind::Containers);
             }
             KeyCode::Char('/') => {
                 self.input_mode = InputMode::Search;
@@ -234,8 +232,7 @@ impl App {
 
     fn handle_search_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Esc => self.input_mode = InputMode::Normal,
-            KeyCode::Enter => self.input_mode = InputMode::Normal,
+            KeyCode::Esc | KeyCode::Enter => self.input_mode = InputMode::Normal,
             KeyCode::Backspace => {
                 self.search_query.pop();
             }
@@ -396,7 +393,8 @@ impl App {
                     self.namespaces.clear();
                     self.containers.clear();
                     self.cancel_log_stream();
-                    self.switch_context();
+                    self.load_namespaces();
+                    self.load_pods();
                 }
             }
             PopupKind::Containers => {
@@ -465,15 +463,16 @@ impl App {
     // -- Helpers ------------------------------------------------------------
 
     pub fn filtered_log_lines(&self) -> Vec<&str> {
-        if self.search_query.is_empty() {
-            self.log_lines.iter().map(|s| s.as_str()).collect()
-        } else {
-            let query = self.search_query.to_lowercase();
-            self.log_lines
-                .iter()
-                .filter(|line| line.to_lowercase().contains(&query))
-                .map(|s| s.as_str())
-                .collect()
+        match self.search_query.as_str() {
+            "" => self.log_lines.iter().map(|s| s.as_str()).collect(),
+            query => {
+                let lower = query.to_lowercase();
+                self.log_lines
+                    .iter()
+                    .filter(|line| line.to_lowercase().contains(&lower))
+                    .map(|s| s.as_str())
+                    .collect()
+            }
         }
     }
 
@@ -561,29 +560,6 @@ impl App {
         if let Some(cancel_tx) = self.log_cancel_tx.take() {
             let _ = cancel_tx.send(true);
         }
-    }
-
-    fn switch_context(&self) {
-        let tx = self.tx.clone();
-        let context = self.current_context.clone();
-        tokio::spawn(async move {
-            match k8s::namespaces::list_namespaces(&context).await {
-                Ok(namespaces) => {
-                    let _ = tx.send(AppEvent::NamespacesLoaded(namespaces));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to load namespaces: {e}")));
-                }
-            }
-            match k8s::pods::list_pods(&context, "default").await {
-                Ok(pods) => {
-                    let _ = tx.send(AppEvent::PodsUpdated(pods));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::Error(format!("Failed to load pods: {e}")));
-                }
-            }
-        });
     }
 }
 
