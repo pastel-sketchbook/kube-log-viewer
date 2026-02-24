@@ -77,6 +77,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         "    f          Toggle follow mode",
         "    w          Toggle wide log view",
         "    W          Toggle line wrap",
+        "    J          Toggle JSON formatting",
         "    t          Cycle theme",
         "",
         "  General:",

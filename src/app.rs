@@ -55,6 +55,7 @@ pub struct App {
     pub follow_mode: bool,
     pub wrap_lines: bool,
     pub wide_logs: bool,
+    pub json_mode: bool,
     pub input_mode: InputMode,
     pub search_query: String,
     pub show_help: bool,
@@ -100,6 +101,7 @@ impl App {
             follow_mode: true,
             wrap_lines: false,
             wide_logs: false,
+            json_mode: true,
             input_mode: InputMode::Normal,
             search_query: String::new(),
             show_help: false,
@@ -200,6 +202,7 @@ impl App {
             KeyCode::Char('f') => self.follow_mode = !self.follow_mode,
             KeyCode::Char('w') => self.wide_logs = !self.wide_logs,
             KeyCode::Char('W') => self.wrap_lines = !self.wrap_lines,
+            KeyCode::Char('J') => self.json_mode = !self.json_mode,
             KeyCode::Char('t') => self.cycle_theme(),
             KeyCode::Tab => {
                 self.focus = match self.focus {
@@ -805,6 +808,16 @@ mod tests {
         assert!(app.wrap_lines);
         app.handle_key(key(KeyCode::Char('W')));
         assert!(!app.wrap_lines);
+    }
+
+    #[test]
+    fn test_shift_j_toggles_json_mode() {
+        let mut app = test_app();
+        assert!(app.json_mode); // default on
+        app.handle_key(key(KeyCode::Char('J')));
+        assert!(!app.json_mode);
+        app.handle_key(key(KeyCode::Char('J')));
+        assert!(app.json_mode);
     }
 
     // -- Search mode --------------------------------------------------------

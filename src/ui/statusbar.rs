@@ -22,33 +22,42 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(" cancel", label),
             Span::styled(format!(" [{}]", theme.name), label),
         ]),
-        InputMode::Normal => Line::from(vec![
-            Span::styled(" ↑↓", key),
-            Span::styled(" nav  ", label),
-            Span::styled("Enter", key),
-            Span::styled(" select  ", label),
-            Span::styled("Tab", key),
-            Span::styled(" focus  ", label),
-            Span::styled("/", key),
-            Span::styled(" search  ", label),
-            Span::styled("n", key),
-            Span::styled(" ns  ", label),
-            Span::styled("c", key),
-            Span::styled(" ctx  ", label),
-            Span::styled("s", key),
-            Span::styled(" container  ", label),
-            Span::styled("f", key),
-            Span::styled(" follow  ", label),
-            Span::styled("w", key),
-            Span::styled(" wide  ", label),
-            Span::styled("t", key),
-            Span::styled(" theme  ", label),
-            Span::styled("?", key),
-            Span::styled(" help  ", label),
-            Span::styled("q", key),
-            Span::styled(" quit", label),
-            Span::styled(format!(" [{}]", theme.name), label),
-        ]),
+        InputMode::Normal => {
+            let active = Style::default().fg(theme.accent);
+            let follow_label = if app.follow_mode { active } else { label };
+            let wide_label = if app.wide_logs { active } else { label };
+            let json_label = if app.json_mode { active } else { label };
+
+            Line::from(vec![
+                Span::styled(" ↑↓", key),
+                Span::styled(" nav  ", label),
+                Span::styled("Enter", key),
+                Span::styled(" select  ", label),
+                Span::styled("Tab", key),
+                Span::styled(" focus  ", label),
+                Span::styled("/", key),
+                Span::styled(" search  ", label),
+                Span::styled("n", key),
+                Span::styled(" ns  ", label),
+                Span::styled("c", key),
+                Span::styled(" ctx  ", label),
+                Span::styled("s", key),
+                Span::styled(" container  ", label),
+                Span::styled("f", key),
+                Span::styled(" follow  ", follow_label),
+                Span::styled("w", key),
+                Span::styled(" wide  ", wide_label),
+                Span::styled("J", key),
+                Span::styled(" json  ", json_label),
+                Span::styled("t", key),
+                Span::styled(" theme  ", label),
+                Span::styled("?", key),
+                Span::styled(" help  ", label),
+                Span::styled("q", key),
+                Span::styled(" quit", label),
+                Span::styled(format!(" [{}]", theme.name), label),
+            ])
+        }
     };
 
     let paragraph = Paragraph::new(status).style(Style::default().bg(theme.statusbar_bg));

@@ -1,8 +1,10 @@
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use regex::Regex;
+use serde_json::Value;
 
 use crate::app::{App, Focus, InputMode};
 use crate::ui::theme::Theme;
@@ -15,6 +17,91 @@ static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*")
         .expect("hardcoded timestamp regex is valid")
 });
+
+// ---------------------------------------------------------------------------
+// JSON flattening
+// ---------------------------------------------------------------------------
+
+/// Well-known field names for timestamp extraction.
+const TIME_KEYS: &[&str] = &["time", "timestamp", "ts", "@timestamp", "datetime"];
+
+/// Well-known field names for log-level extraction.
+const LEVEL_KEYS: &[&str] = &["level", "severity", "loglevel", "log_level", "lvl"];
+
+/// Well-known field names for message extraction.
+const MSG_KEYS: &[&str] = &["msg", "message"];
+
+/// Flatten a JSON object line into `timestamp [LEVEL] message key=value ...`.
+///
+/// Returns `Cow::Borrowed` for non-JSON lines (no allocation).
+/// The output is designed to feed into `colorize_log_line()` so that
+/// the extracted timestamp gets muted color and the level gets keyword color.
+fn format_json_line(line: &str) -> Cow<'_, str> {
+    if !line.starts_with('{') {
+        return Cow::Borrowed(line);
+    }
+
+    let obj = match serde_json::from_str::<Value>(line) {
+        Ok(Value::Object(map)) => map,
+        _ => return Cow::Borrowed(line),
+    };
+
+    let mut parts: Vec<String> = Vec::new();
+    let mut used_keys: Vec<&str> = Vec::new();
+
+    // 1. Extract timestamp
+    for &key in TIME_KEYS {
+        if let Some(val) = obj.get(key)
+            && let Some(s) = val.as_str()
+            && !s.is_empty()
+        {
+            parts.push(s.to_string());
+            used_keys.push(key);
+            break;
+        }
+    }
+
+    // 2. Extract level
+    for &key in LEVEL_KEYS {
+        if let Some(val) = obj.get(key)
+            && let Some(s) = val.as_str()
+            && !s.is_empty()
+        {
+            parts.push(format!("[{}]", s.to_uppercase()));
+            used_keys.push(key);
+            break;
+        }
+    }
+
+    // 3. Extract message
+    for &key in MSG_KEYS {
+        if let Some(val) = obj.get(key)
+            && let Some(s) = val.as_str()
+            && !s.is_empty()
+        {
+            parts.push(s.to_string());
+            used_keys.push(key);
+            break;
+        }
+    }
+
+    // 4. Remaining fields as key=value
+    for (key, val) in &obj {
+        if used_keys.contains(&key.as_str()) {
+            continue;
+        }
+        match val {
+            Value::Null => continue,
+            Value::String(s) if s.is_empty() => continue,
+            Value::String(s) => parts.push(format!("{key}={s}")),
+            Value::Number(n) => parts.push(format!("{key}={n}")),
+            Value::Bool(b) => parts.push(format!("{key}={b}")),
+            _ => parts.push(format!("{key}={val}")),
+        }
+    }
+
+    Cow::Owned(parts.join(" "))
+}
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let title = match (&app.selected_pod, &app.selected_container) {
@@ -48,16 +135,30 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             .min(total_lines.saturating_sub(inner_height))
     };
 
-    let visible_lines: Vec<Line> = filtered_lines
+    // Apply JSON flattening (if enabled) before colorization.
+    // Formatted strings must outlive the Span references, so collect first.
+    let formatted: Vec<Cow<str>> = filtered_lines
         .iter()
         .skip(scroll_offset)
         .take(inner_height)
+        .map(|line| {
+            if app.json_mode {
+                format_json_line(line)
+            } else {
+                Cow::Borrowed(*line)
+            }
+        })
+        .collect();
+
+    let visible_lines: Vec<Line> = formatted
+        .iter()
         .enumerate()
         .map(|(i, line)| {
+            let s: &str = line.as_ref();
             let mut styled = if !app.search_query.is_empty() {
-                highlight_search(line, &app.search_query, theme)
+                highlight_search(s, &app.search_query, theme)
             } else {
-                Line::from(colorize_log_line(line, theme))
+                Line::from(colorize_log_line(s, theme))
             };
             if i % 2 == 1 {
                 styled = styled.style(Style::default().bg(theme.zebra_bg));
@@ -306,5 +407,118 @@ mod tests {
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].content, "test");
         assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
+    }
+
+    // -- format_json_line ---------------------------------------------------
+
+    #[test]
+    fn test_json_non_json_passthrough() {
+        let line = "plain log line";
+        let result = format_json_line(line);
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(result.as_ref(), "plain log line");
+    }
+
+    #[test]
+    fn test_json_invalid_json_passthrough() {
+        let line = "{not valid json at all";
+        let result = format_json_line(line);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn test_json_array_passthrough() {
+        let line = r#"[1, 2, 3]"#;
+        let result = format_json_line(line);
+        assert!(matches!(result, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn test_json_extracts_time_field() {
+        let line = r#"{"time":"2026-02-24T16:36:51.600Z","method":"GET","uri":"/metrics"}"#;
+        let result = format_json_line(line);
+        assert!(result.starts_with("2026-02-24T16:36:51.600Z"));
+        assert!(result.contains("method=GET"));
+        assert!(result.contains("uri=/metrics"));
+        // time should not appear as key=value
+        assert!(!result.contains("time="));
+    }
+
+    #[test]
+    fn test_json_extracts_timestamp_field() {
+        let line = r#"{"timestamp":"2026-01-01T00:00:00Z","msg":"hello"}"#;
+        let result = format_json_line(line);
+        assert!(result.starts_with("2026-01-01T00:00:00Z"));
+        assert!(result.contains("hello"));
+        assert!(!result.contains("timestamp="));
+        assert!(!result.contains("msg="));
+    }
+
+    #[test]
+    fn test_json_extracts_level_as_bracket() {
+        let line = r#"{"level":"error","msg":"something broke"}"#;
+        let result = format_json_line(line);
+        assert!(result.contains("[ERROR]"));
+        assert!(result.contains("something broke"));
+        assert!(!result.contains("level="));
+    }
+
+    #[test]
+    fn test_json_extracts_severity() {
+        let line = r#"{"severity":"warn","message":"disk full"}"#;
+        let result = format_json_line(line);
+        assert!(result.contains("[WARN]"));
+        assert!(result.contains("disk full"));
+    }
+
+    #[test]
+    fn test_json_skips_empty_strings_and_null() {
+        let line = r#"{"time":"2026-01-01T00:00:00Z","error":"","extra":null,"status":200}"#;
+        let result = format_json_line(line);
+        assert!(!result.contains("error="));
+        assert!(!result.contains("extra="));
+        assert!(result.contains("status=200"));
+    }
+
+    #[test]
+    fn test_json_formats_booleans() {
+        let line = r#"{"ok":true,"retry":false}"#;
+        let result = format_json_line(line);
+        assert!(result.contains("ok=true"));
+        assert!(result.contains("retry=false"));
+    }
+
+    #[test]
+    fn test_json_full_http_access_log() {
+        let line = r#"{"time":"2026-02-24T16:36:51.600Z","id":"abc-123","remote_ip":"10.0.0.1","method":"GET","uri":"/health","status":200,"error":"","latency_human":"1.5ms","bytes_in":0,"bytes_out":19}"#;
+        let result = format_json_line(line);
+        // Timestamp first
+        assert!(result.starts_with("2026-02-24T16:36:51.600Z"));
+        // Key fields present
+        assert!(result.contains("method=GET"));
+        assert!(result.contains("uri=/health"));
+        assert!(result.contains("status=200"));
+        assert!(result.contains("latency_human=1.5ms"));
+        // Empty error skipped
+        assert!(!result.contains("error="));
+    }
+
+    #[test]
+    fn test_json_timestamp_feeds_colorizer() {
+        // Verify the flattened output starts with a timestamp that TIMESTAMP_RE can match
+        let line = r#"{"time":"2026-02-24T16:36:51.600Z","status":200}"#;
+        let result = format_json_line(line);
+        assert!(TIMESTAMP_RE.is_match(result.as_ref()));
+    }
+
+    #[test]
+    fn test_json_level_feeds_colorizer() {
+        // Verify the flattened output contains ERROR keyword for colorize_log_line
+        let line = r#"{"level":"error","msg":"fail"}"#;
+        let result = format_json_line(line);
+        let spans = colorize_log_line(result.as_ref(), &DARK);
+        // Should detect ERROR and color it
+        let has_error_color = spans.iter().any(|s| s.style.fg == Some(DARK.log_error));
+        assert!(has_error_color);
     }
 }

@@ -973,7 +973,7 @@ dependencies = [
 
 [[package]]
 name = "kube-log-viewer"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -985,6 +985,7 @@ dependencies = [
  "libc",
  "ratatui",
  "regex",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-appender",

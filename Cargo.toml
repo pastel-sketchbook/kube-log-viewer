@@ -1,6 +1,6 @@
 [package]
 name = "kube-log-viewer"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 description = "A terminal UI for streaming and searching Kubernetes pod logs"
 
@@ -19,6 +19,7 @@ kube = { version = "3.0.1", features = ["client", "config", "rustls-tls"] }
 libc = "0.2.182"
 ratatui = "0.30.0"
 regex = "1.12.3"
+serde_json = "1.0.149"
 tracing = "0.1.44"
 tracing-appender = "0.2.4"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
