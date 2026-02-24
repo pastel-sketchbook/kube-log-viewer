@@ -30,7 +30,32 @@ pub enum PopupKind {
     Contexts,
     Containers,
     TimeRange,
+    ExportFormat,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    PlainText,
+    Json,
+    Csv,
+}
+
+impl ExportFormat {
+    /// File extension for this format (without the leading dot).
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::PlainText => "log",
+            Self::Json => "json",
+            Self::Csv => "csv",
+        }
+    }
+}
+
+pub const EXPORT_FORMAT_OPTIONS: &[(&str, ExportFormat)] = &[
+    ("Plain Text (.log)", ExportFormat::PlainText),
+    ("JSON (.json)", ExportFormat::Json),
+    ("CSV (.csv)", ExportFormat::Csv),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -345,6 +370,13 @@ impl App {
             KeyCode::Char('T') => self.timestamp_mode = self.timestamp_mode.cycle(),
             KeyCode::Char('R') => self.open_popup(PopupKind::TimeRange),
             KeyCode::Char('t') => self.cycle_theme(),
+            KeyCode::Char('E') => {
+                if self.json_mode {
+                    self.open_popup(PopupKind::ExportFormat);
+                } else {
+                    self.export_logs(ExportFormat::PlainText);
+                }
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     Focus::Pods => Focus::Logs,
@@ -591,6 +623,7 @@ impl App {
             PopupKind::TimeRange => TIME_RANGE_OPTIONS
                 .iter()
                 .position(|&(_, r)| r == self.time_range),
+            PopupKind::ExportFormat => Some(0),
         };
 
         self.popup_list_state.select(selected.or(Some(0)));
@@ -603,6 +636,7 @@ impl App {
             Some(PopupKind::Contexts) => self.contexts.len(),
             Some(PopupKind::Containers) => self.containers.len(),
             Some(PopupKind::TimeRange) => TIME_RANGE_OPTIONS.len(),
+            Some(PopupKind::ExportFormat) => EXPORT_FORMAT_OPTIONS.len(),
             None => 0,
         }
     }
@@ -666,6 +700,11 @@ impl App {
                 if let Some(&(label, range)) = TIME_RANGE_OPTIONS.get(i) {
                     info!(range = label, "setting time range filter");
                     self.time_range = range;
+                }
+            }
+            PopupKind::ExportFormat => {
+                if let Some(&(_, format)) = EXPORT_FORMAT_OPTIONS.get(i) {
+                    self.export_logs(format);
                 }
             }
         }
@@ -746,6 +785,11 @@ impl App {
                         )));
                     }
                 }
+            }
+            AppEvent::ExportCompleted(path) => {
+                info!(path = %path, "export completed");
+                self.log_lines
+                    .push(TaggedLine::system(format!("[INFO] Exported to {path}")));
             }
             AppEvent::Error(msg) => {
                 error!(message = %msg, "background task error");
@@ -1012,6 +1056,83 @@ impl App {
         }
     }
 
+    // -- Export --------------------------------------------------------------
+
+    /// Collect export lines respecting current view mode and filters.
+    /// Returns `(source, raw_line)` pairs.
+    fn collect_export_lines(&self) -> Vec<(String, String)> {
+        let lines = if self.stream_mode == StreamMode::Split {
+            self.filtered_log_lines_for_pane(self.active_pane)
+        } else {
+            self.filtered_log_lines()
+        };
+        lines
+            .into_iter()
+            .map(|tl| (tl.source.clone(), tl.line.clone()))
+            .collect()
+    }
+
+    /// Build export metadata from the current app state.
+    fn export_metadata(&self) -> ExportMetadata {
+        let pod_names: Vec<String> = if self.stream_mode == StreamMode::Split {
+            self.streams
+                .get(self.active_pane)
+                .map(|h| vec![h.pod_name.clone()])
+                .unwrap_or_default()
+        } else {
+            self.streams.iter().map(|h| h.pod_name.clone()).collect()
+        };
+        ExportMetadata {
+            context: self.current_context.clone(),
+            namespace: self.current_namespace.clone(),
+            pod_names,
+            exported_at: chrono::Local::now(),
+        }
+    }
+
+    /// Trigger a log export in the given format.
+    /// Runs the file write on a background task.
+    fn export_logs(&mut self, format: ExportFormat) {
+        let lines = self.collect_export_lines();
+        if lines.is_empty() {
+            self.log_lines.push(TaggedLine::system(
+                "[INFO] Nothing to export — no log lines".to_string(),
+            ));
+            return;
+        }
+
+        let meta = self.export_metadata();
+        let stream_mode = self.stream_mode;
+        let tx = self.tx.clone();
+
+        let ext = format.extension();
+        let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let filename = format!("kube-log-viewer-export-{timestamp}.{ext}");
+        let path = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(&filename);
+
+        info!(format = ?format, path = %path.display(), lines = lines.len(), "exporting logs");
+
+        tokio::spawn(async move {
+            let result = match format {
+                ExportFormat::PlainText => {
+                    write_plain_text(&path, &meta, &lines, stream_mode).await
+                }
+                ExportFormat::Json => write_json(&path, &meta, &lines).await,
+                ExportFormat::Csv => write_csv(&path, &meta, &lines).await,
+            };
+            match result {
+                Ok(()) => {
+                    let _ = tx.send(AppEvent::ExportCompleted(path.display().to_string()));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::Error(format!("Export failed: {e:#}")));
+                }
+            }
+        });
+    }
+
     /// Spawn `az login` in the background and send [`AppEvent::AzLoginCompleted`]
     /// when it finishes. Opens the default browser for interactive auth.
     fn spawn_az_login(&mut self) {
@@ -1054,6 +1175,208 @@ impl App {
                 }
             }
         });
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Export types & writers
+// ---------------------------------------------------------------------------
+
+/// Metadata included in the header of every exported file.
+#[derive(Debug, Clone)]
+pub struct ExportMetadata {
+    pub context: String,
+    pub namespace: String,
+    pub pod_names: Vec<String>,
+    pub exported_at: chrono::DateTime<chrono::Local>,
+}
+
+impl ExportMetadata {
+    /// Format as plain-text header lines (prefixed with `# `).
+    fn as_comment_lines(&self) -> String {
+        let pods = if self.pod_names.is_empty() {
+            "(none)".to_string()
+        } else {
+            self.pod_names.join(", ")
+        };
+        format!(
+            "# Context:   {}\n# Namespace: {}\n# Pod(s):    {}\n# Exported:  {}\n",
+            self.context,
+            self.namespace,
+            pods,
+            self.exported_at.format("%Y-%m-%d %H:%M:%S %z"),
+        )
+    }
+}
+
+/// Write logs as plain text with a comment header.
+async fn write_plain_text(
+    path: &std::path::Path,
+    meta: &ExportMetadata,
+    lines: &[(String, String)],
+    stream_mode: StreamMode,
+) -> Result<()> {
+    use tokio::io::AsyncWriteExt;
+
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .with_context(|| format!("failed to create {}", path.display()))?;
+
+    // Header
+    file.write_all(meta.as_comment_lines().as_bytes())
+        .await
+        .context("failed to write header")?;
+    file.write_all(b"#\n").await?;
+
+    for (source, line) in lines {
+        if stream_mode == StreamMode::Merged && !source.is_empty() {
+            file.write_all(format!("[{source}] {line}\n").as_bytes())
+                .await?;
+        } else {
+            file.write_all(format!("{line}\n").as_bytes()).await?;
+        }
+    }
+
+    file.flush().await.context("failed to flush export file")?;
+    Ok(())
+}
+
+/// Write logs as a JSON array with a `_metadata` preamble object.
+async fn write_json(
+    path: &std::path::Path,
+    meta: &ExportMetadata,
+    lines: &[(String, String)],
+) -> Result<()> {
+    use serde_json::{Map, Value, json};
+
+    let metadata = json!({
+        "context": meta.context,
+        "namespace": meta.namespace,
+        "pods": meta.pod_names,
+        "exported_at": meta.exported_at.format("%Y-%m-%dT%H:%M:%S%z").to_string(),
+    });
+
+    let mut entries: Vec<Value> = Vec::with_capacity(lines.len());
+    for (source, raw) in lines {
+        match serde_json::from_str::<Value>(raw) {
+            Ok(Value::Object(mut map)) => {
+                if !source.is_empty() {
+                    map.insert("_source".to_string(), Value::String(source.clone()));
+                }
+                entries.push(Value::Object(map));
+            }
+            _ => {
+                let mut map = Map::new();
+                if !source.is_empty() {
+                    map.insert("_source".to_string(), Value::String(source.clone()));
+                }
+                map.insert("_raw".to_string(), Value::String(raw.clone()));
+                entries.push(Value::Object(map));
+            }
+        }
+    }
+
+    let output = json!({
+        "_metadata": metadata,
+        "lines": entries,
+    });
+
+    let json_str =
+        serde_json::to_string_pretty(&output).context("failed to serialize export JSON")?;
+    tokio::fs::write(path, json_str.as_bytes())
+        .await
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+/// Write logs as CSV with a comment header and union-of-keys columns.
+async fn write_csv(
+    path: &std::path::Path,
+    meta: &ExportMetadata,
+    lines: &[(String, String)],
+) -> Result<()> {
+    use std::collections::BTreeSet;
+    use tokio::io::AsyncWriteExt;
+
+    // First pass: collect union of all JSON keys
+    let mut all_keys = BTreeSet::new();
+    let mut parsed: Vec<Option<serde_json::Map<String, serde_json::Value>>> =
+        Vec::with_capacity(lines.len());
+    for (_source, raw) in lines {
+        match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(serde_json::Value::Object(map)) => {
+                for key in map.keys() {
+                    all_keys.insert(key.clone());
+                }
+                parsed.push(Some(map));
+            }
+            _ => {
+                parsed.push(None);
+            }
+        }
+    }
+
+    let columns: Vec<String> = std::iter::once("_source".to_string())
+        .chain(all_keys.into_iter())
+        .chain(std::iter::once("_raw".to_string()))
+        .collect();
+
+    let mut file = tokio::fs::File::create(path)
+        .await
+        .with_context(|| format!("failed to create {}", path.display()))?;
+
+    // Comment header (CSV viewers typically skip lines starting with #)
+    file.write_all(meta.as_comment_lines().as_bytes())
+        .await
+        .context("failed to write CSV header")?;
+    file.write_all(b"#\n").await?;
+
+    // Column header row
+    let header: Vec<String> = columns.iter().map(|c| csv_escape(c)).collect();
+    file.write_all(format!("{}\n", header.join(",")).as_bytes())
+        .await?;
+
+    // Data rows
+    for (i, (source, raw)) in lines.iter().enumerate() {
+        let row: Vec<String> = columns
+            .iter()
+            .map(|col| {
+                if col == "_source" {
+                    return csv_escape(source);
+                }
+                if col == "_raw" {
+                    // Only populate _raw for non-JSON lines
+                    if parsed[i].is_none() {
+                        return csv_escape(raw);
+                    }
+                    return String::new();
+                }
+                // JSON field
+                match &parsed[i] {
+                    Some(map) => match map.get(col) {
+                        Some(serde_json::Value::String(s)) => csv_escape(s),
+                        Some(serde_json::Value::Null) => String::new(),
+                        Some(v) => csv_escape(&v.to_string()),
+                        None => String::new(),
+                    },
+                    None => String::new(),
+                }
+            })
+            .collect();
+        file.write_all(format!("{}\n", row.join(",")).as_bytes())
+            .await?;
+    }
+
+    file.flush().await.context("failed to flush CSV file")?;
+    Ok(())
+}
+
+/// Escape a value for CSV: wrap in quotes if it contains comma, quote, or newline.
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
     }
 }
 
@@ -1998,5 +2321,328 @@ mod tests {
 
         app.cancel_all_streams();
         assert!(app.streams.is_empty());
+    }
+
+    // -- Export --------------------------------------------------------------
+
+    #[test]
+    fn test_e_key_opens_popup_when_json_mode() {
+        let mut app = test_app();
+        app.json_mode = true;
+        app.handle_key(key(KeyCode::Char('E')));
+        assert_eq!(app.popup, Some(PopupKind::ExportFormat));
+    }
+
+    #[tokio::test]
+    async fn test_e_key_exports_directly_when_not_json_mode() {
+        let mut app = test_app();
+        app.json_mode = false;
+        app.log_lines = vec![tl("hello")];
+        // export_logs will spawn a tokio task that writes to a file.
+        // We just verify the popup is NOT opened (direct export path).
+        app.handle_key(key(KeyCode::Char('E')));
+        assert!(app.popup.is_none());
+    }
+
+    #[test]
+    fn test_export_format_popup_items_len() {
+        let mut app = test_app();
+        app.popup = Some(PopupKind::ExportFormat);
+        assert_eq!(app.popup_items_len(), EXPORT_FORMAT_OPTIONS.len());
+    }
+
+    #[test]
+    fn test_export_logs_empty_shows_info() {
+        let mut app = test_app();
+        app.export_logs(ExportFormat::PlainText);
+        assert_eq!(app.log_lines.len(), 1);
+        assert!(app.log_lines[0].line.contains("Nothing to export"));
+    }
+
+    #[test]
+    fn test_collect_export_lines_single_mode() {
+        let mut app = test_app();
+        app.log_lines = vec![
+            tl_src("pod-a", "line 1"),
+            tl_src("pod-a", "line 2"),
+            TaggedLine::system("[INFO] system".to_string()),
+        ];
+        let lines = app.collect_export_lines();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], ("pod-a".to_string(), "line 1".to_string()));
+        assert_eq!(lines[2], (String::new(), "[INFO] system".to_string()));
+    }
+
+    #[test]
+    fn test_collect_export_lines_split_mode() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.stream_mode = StreamMode::Split;
+        app.active_pane = 1; // pod-b
+
+        app.log_lines = vec![
+            tl_src("pod-a", "from a"),
+            tl_src("pod-b", "from b"),
+            TaggedLine::system("[INFO] sys".to_string()),
+        ];
+
+        let lines = app.collect_export_lines();
+        // Should only include pod-b lines + system messages
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].0, "pod-b");
+        assert!(lines[1].0.is_empty()); // system message
+    }
+
+    #[test]
+    fn test_export_metadata_single_mode() {
+        let mut app = test_app();
+        app.current_context = "my-ctx".to_string();
+        app.current_namespace = "my-ns".to_string();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+
+        let meta = app.export_metadata();
+        assert_eq!(meta.context, "my-ctx");
+        assert_eq!(meta.namespace, "my-ns");
+        assert_eq!(meta.pod_names, vec!["pod-a"]);
+    }
+
+    #[test]
+    fn test_export_metadata_split_mode() {
+        let mut app = test_app();
+        app.current_context = "ctx".to_string();
+        app.current_namespace = "ns".to_string();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.stream_mode = StreamMode::Split;
+        app.active_pane = 1;
+
+        let meta = app.export_metadata();
+        // Split mode only includes the active pane's pod
+        assert_eq!(meta.pod_names, vec!["pod-b"]);
+    }
+
+    #[test]
+    fn test_export_metadata_comment_lines() {
+        let meta = ExportMetadata {
+            context: "k8s-cts-aks-d-kubesvc-1".to_string(),
+            namespace: "production".to_string(),
+            pod_names: vec!["web-abc123".to_string(), "api-def456".to_string()],
+            exported_at: chrono::Local::now(),
+        };
+        let header = meta.as_comment_lines();
+        assert!(header.contains("# Context:   k8s-cts-aks-d-kubesvc-1"));
+        assert!(header.contains("# Namespace: production"));
+        assert!(header.contains("# Pod(s):    web-abc123, api-def456"));
+        assert!(header.contains("# Exported:"));
+    }
+
+    #[test]
+    fn test_csv_escape() {
+        assert_eq!(csv_escape("hello"), "hello");
+        assert_eq!(csv_escape("has,comma"), "\"has,comma\"");
+        assert_eq!(csv_escape("has\"quote"), "\"has\"\"quote\"");
+        assert_eq!(csv_escape("has\nnewline"), "\"has\nnewline\"");
+        assert_eq!(csv_escape("plain"), "plain");
+    }
+
+    #[tokio::test]
+    async fn test_write_plain_text() {
+        let dir = std::env::temp_dir().join("klv-test-plain");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.log");
+
+        let meta = ExportMetadata {
+            context: "test-ctx".to_string(),
+            namespace: "test-ns".to_string(),
+            pod_names: vec!["pod-x".to_string()],
+            exported_at: chrono::Local::now(),
+        };
+        let lines = vec![
+            ("pod-x".to_string(), "line one".to_string()),
+            (String::new(), "[INFO] sys".to_string()),
+        ];
+
+        write_plain_text(&path, &meta, &lines, StreamMode::Single)
+            .await
+            .expect("write_plain_text failed");
+
+        let content = std::fs::read_to_string(&path).expect("read failed");
+        assert!(content.contains("# Context:   test-ctx"));
+        assert!(content.contains("# Namespace: test-ns"));
+        assert!(content.contains("# Pod(s):    pod-x"));
+        assert!(content.contains("# Exported:"));
+        assert!(content.contains("line one\n"));
+        assert!(content.contains("[INFO] sys\n"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_plain_text_merged_mode() {
+        let dir = std::env::temp_dir().join("klv-test-plain-merged");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.log");
+
+        let meta = ExportMetadata {
+            context: "ctx".to_string(),
+            namespace: "ns".to_string(),
+            pod_names: vec!["pod-a".to_string(), "pod-b".to_string()],
+            exported_at: chrono::Local::now(),
+        };
+        let lines = vec![
+            ("pod-a".to_string(), "from a".to_string()),
+            ("pod-b".to_string(), "from b".to_string()),
+        ];
+
+        write_plain_text(&path, &meta, &lines, StreamMode::Merged)
+            .await
+            .expect("write failed");
+
+        let content = std::fs::read_to_string(&path).expect("read failed");
+        assert!(content.contains("[pod-a] from a"));
+        assert!(content.contains("[pod-b] from b"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_json() {
+        let dir = std::env::temp_dir().join("klv-test-json");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.json");
+
+        let meta = ExportMetadata {
+            context: "ctx".to_string(),
+            namespace: "ns".to_string(),
+            pod_names: vec!["pod-x".to_string()],
+            exported_at: chrono::Local::now(),
+        };
+        let lines = vec![
+            (
+                "pod-x".to_string(),
+                r#"{"level":"info","msg":"hello"}"#.to_string(),
+            ),
+            ("pod-x".to_string(), "not json".to_string()),
+        ];
+
+        write_json(&path, &meta, &lines)
+            .await
+            .expect("write_json failed");
+
+        let content = std::fs::read_to_string(&path).expect("read failed");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&content).expect("invalid JSON output");
+
+        // Check metadata
+        assert_eq!(parsed["_metadata"]["context"], "ctx");
+        assert_eq!(parsed["_metadata"]["namespace"], "ns");
+        assert_eq!(parsed["_metadata"]["pods"][0], "pod-x");
+
+        // Check lines
+        let arr = parsed["lines"].as_array().expect("lines should be array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["_source"], "pod-x");
+        assert_eq!(arr[0]["level"], "info");
+        assert_eq!(arr[1]["_raw"], "not json");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_write_csv() {
+        let dir = std::env::temp_dir().join("klv-test-csv");
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("test.csv");
+
+        let meta = ExportMetadata {
+            context: "ctx".to_string(),
+            namespace: "ns".to_string(),
+            pod_names: vec!["pod-x".to_string()],
+            exported_at: chrono::Local::now(),
+        };
+        let lines = vec![
+            (
+                "pod-x".to_string(),
+                r#"{"level":"info","msg":"hello"}"#.to_string(),
+            ),
+            ("pod-x".to_string(), "plain text line".to_string()),
+        ];
+
+        write_csv(&path, &meta, &lines)
+            .await
+            .expect("write_csv failed");
+
+        let content = std::fs::read_to_string(&path).expect("read failed");
+
+        // Should have comment header
+        assert!(content.contains("# Context:   ctx"));
+        assert!(content.contains("# Namespace: ns"));
+
+        // Find the CSV header row (first non-comment line)
+        let data_lines: Vec<&str> = content.lines().filter(|l| !l.starts_with('#')).collect();
+        assert!(data_lines.len() >= 3); // header + 2 data rows
+
+        let header = data_lines[0];
+        assert!(header.contains("_source"));
+        assert!(header.contains("level"));
+        assert!(header.contains("msg"));
+        assert!(header.contains("_raw"));
+
+        // JSON line should have level and msg filled
+        let json_row = data_lines[1];
+        assert!(json_row.contains("pod-x"));
+        assert!(json_row.contains("info"));
+        assert!(json_row.contains("hello"));
+
+        // Plain text line should have _raw filled
+        let plain_row = data_lines[2];
+        assert!(plain_row.contains("plain text line"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn test_export_completed_event() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::ExportCompleted("/tmp/test.log".to_string()));
+        assert_eq!(app.log_lines.len(), 1);
+        assert!(app.log_lines[0].line.contains("[INFO] Exported to"));
+        assert!(app.log_lines[0].line.contains("/tmp/test.log"));
     }
 }

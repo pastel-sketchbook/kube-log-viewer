@@ -16,6 +16,8 @@ pub enum AppEvent {
     LogStreamEnded,
     /// `az login` completed (success or failure message)
     AzLoginCompleted(Result<(), String>),
+    /// Log export completed successfully — payload is the file path
+    ExportCompleted(String),
     /// An error from a background K8s operation
     Error(String),
 }

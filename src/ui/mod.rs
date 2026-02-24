@@ -104,6 +104,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         "  1-4        Switch pane (split mode)",
         "",
         "General:",
+        "  E          Export logs to file",
         "  ?          Toggle this help",
         "  q          Quit",
         "  Ctrl+C     Force quit",
