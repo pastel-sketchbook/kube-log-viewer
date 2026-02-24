@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 
-use crate::app::{App, PopupKind};
+use crate::app::{App, PopupKind, TIME_RANGE_OPTIONS};
 
 /// Build styled list items, highlighting the currently-selected value.
 fn styled_items<'a>(
@@ -20,6 +20,22 @@ fn styled_items<'a>(
                 _ => Style::default().fg(normal),
             };
             ListItem::new(Span::styled(item.as_str(), style))
+        })
+        .collect()
+}
+
+/// Build list items for time range options, highlighting the active range.
+fn time_range_items(app: &App, highlight: Color, normal: Color) -> Vec<ListItem<'static>> {
+    let current_label = app.time_range.label();
+    TIME_RANGE_OPTIONS
+        .iter()
+        .map(|&(label, _)| {
+            let style = if label == current_label {
+                Style::default().fg(highlight).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(normal)
+            };
+            ListItem::new(Span::styled(label, style))
         })
         .collect()
 }
@@ -55,6 +71,10 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 theme.search_fg,
                 theme.popup_fg,
             ),
+        ),
+        PopupKind::TimeRange => (
+            " Time Range ",
+            time_range_items(app, theme.accent, theme.popup_fg),
         ),
     };
 

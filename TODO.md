@@ -77,5 +77,6 @@ Implementation roadmap organized in phases. Each phase builds on the previous.
 - [ ] Pod auto-refresh via `kube::runtime::watcher`
 - [ ] Log export to file
 - [ ] Config file for themes / keybindings
-- [ ] Relative time display for timestamps
+- [x] Timestamp display modes: UTC / Local / Relative (`T` cycle)
+- [x] Time range filtering popup (`R`) with predefined ranges
 - [ ] Multiple simultaneous log streams (split pane)

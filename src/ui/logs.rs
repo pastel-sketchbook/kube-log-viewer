@@ -13,7 +13,7 @@ use crate::ui::theme::Theme;
 /// Matches ISO 8601 / RFC 3339 timestamps at the start of a log line.
 /// Covers K8s native format (`2024-01-15T10:00:00Z`, `…T10:00:00.123456789Z`)
 /// and common application formats (`2024-01-15 10:00:00`, `…10:00:00,123`).
-static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
     // Safety: this is a hardcoded literal that is guaranteed to compile.
     Regex::new(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*")
         .expect("hardcoded timestamp regex is valid")
@@ -211,7 +211,7 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Try to parse a timestamp string into a `DateTime<Utc>`.
 /// Handles RFC 3339 (with timezone) and `YYYY-MM-DD HH:MM:SS` (assumed UTC).
-fn parse_log_timestamp(ts: &str) -> Option<DateTime<Utc>> {
+pub(crate) fn parse_log_timestamp(ts: &str) -> Option<DateTime<Utc>> {
     let trimmed = ts.trim();
     // Try RFC 3339 first (covers `2026-02-24T16:36:51.600Z`, `...+05:30`)
     if let Ok(dt) = DateTime::parse_from_rfc3339(trimmed) {

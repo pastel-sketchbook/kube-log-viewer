@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ratatui::prelude::*;
@@ -28,6 +29,7 @@ pub enum PopupKind {
     Namespaces,
     Contexts,
     Containers,
+    TimeRange,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +64,38 @@ impl TimestampMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimeRange {
+    #[default]
+    All,
+    Last(Duration),
+}
+
+/// Predefined time range options shown in the popup.
+pub const TIME_RANGE_OPTIONS: &[(&str, TimeRange)] = &[
+    ("All", TimeRange::All),
+    ("Last 5m", TimeRange::Last(Duration::from_secs(5 * 60))),
+    ("Last 15m", TimeRange::Last(Duration::from_secs(15 * 60))),
+    ("Last 30m", TimeRange::Last(Duration::from_secs(30 * 60))),
+    ("Last 1h", TimeRange::Last(Duration::from_secs(60 * 60))),
+    ("Last 6h", TimeRange::Last(Duration::from_secs(6 * 60 * 60))),
+    (
+        "Last 24h",
+        TimeRange::Last(Duration::from_secs(24 * 60 * 60)),
+    ),
+];
+
+impl TimeRange {
+    pub fn label(self) -> &'static str {
+        for &(name, range) in TIME_RANGE_OPTIONS {
+            if range == self {
+                return name;
+            }
+        }
+        "Custom"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
@@ -83,6 +117,7 @@ pub struct App {
     pub wide_logs: bool,
     pub json_mode: bool,
     pub timestamp_mode: TimestampMode,
+    pub time_range: TimeRange,
     pub input_mode: InputMode,
     pub search_query: String,
     pub show_help: bool,
@@ -130,6 +165,7 @@ impl App {
             wide_logs: false,
             json_mode: true,
             timestamp_mode: TimestampMode::default(),
+            time_range: TimeRange::default(),
             input_mode: InputMode::Normal,
             search_query: String::new(),
             show_help: false,
@@ -232,6 +268,7 @@ impl App {
             KeyCode::Char('W') => self.wrap_lines = !self.wrap_lines,
             KeyCode::Char('J') => self.json_mode = !self.json_mode,
             KeyCode::Char('T') => self.timestamp_mode = self.timestamp_mode.cycle(),
+            KeyCode::Char('R') => self.open_popup(PopupKind::TimeRange),
             KeyCode::Char('t') => self.cycle_theme(),
             KeyCode::Tab => {
                 self.focus = match self.focus {
@@ -397,6 +434,9 @@ impl App {
                 .selected_container
                 .as_ref()
                 .and_then(|sc| self.containers.iter().position(|c| c == sc)),
+            PopupKind::TimeRange => TIME_RANGE_OPTIONS
+                .iter()
+                .position(|&(_, r)| r == self.time_range),
         };
 
         self.popup_list_state.select(selected.or(Some(0)));
@@ -408,6 +448,7 @@ impl App {
             Some(PopupKind::Namespaces) => self.namespaces.len(),
             Some(PopupKind::Contexts) => self.contexts.len(),
             Some(PopupKind::Containers) => self.containers.len(),
+            Some(PopupKind::TimeRange) => TIME_RANGE_OPTIONS.len(),
             None => 0,
         }
     }
@@ -459,6 +500,12 @@ impl App {
                         let container = self.selected_container.clone();
                         self.start_log_stream(&pod, container.as_deref());
                     }
+                }
+            }
+            PopupKind::TimeRange => {
+                if let Some(&(label, range)) = TIME_RANGE_OPTIONS.get(i) {
+                    info!(range = label, "setting time range filter");
+                    self.time_range = range;
                 }
             }
         }
@@ -552,17 +599,41 @@ impl App {
     }
 
     pub fn filtered_log_lines(&self) -> Vec<&str> {
-        match self.search_query.as_str() {
-            "" => self.log_lines.iter().map(|s| s.as_str()).collect(),
-            query => {
-                let lower = query.to_lowercase();
-                self.log_lines
-                    .iter()
-                    .filter(|line| line.to_lowercase().contains(&lower))
-                    .map(|s| s.as_str())
-                    .collect()
+        let search_lower = if self.search_query.is_empty() {
+            None
+        } else {
+            Some(self.search_query.to_lowercase())
+        };
+
+        let cutoff = match self.time_range {
+            TimeRange::All => None,
+            TimeRange::Last(dur) => {
+                let now = Utc::now();
+                Some(now - chrono::Duration::from_std(dur).unwrap_or(chrono::Duration::zero()))
             }
-        }
+        };
+
+        self.log_lines
+            .iter()
+            .filter(|line| {
+                // Search filter
+                if let Some(ref lower) = search_lower
+                    && !line.to_lowercase().contains(lower)
+                {
+                    return false;
+                }
+                // Time range filter
+                if let Some(cutoff_dt) = cutoff
+                    && let Some(m) = ui::logs::TIMESTAMP_RE.find(line.as_str())
+                    && let Some(dt) = ui::logs::parse_log_timestamp(&line[..m.end()])
+                {
+                    return dt >= cutoff_dt;
+                }
+                // Lines without parseable timestamps are always included
+                true
+            })
+            .map(|s| s.as_str())
+            .collect()
     }
 
     // -- K8s background operations ------------------------------------------
@@ -1173,5 +1244,114 @@ mod tests {
         // After adding one more (total 50002), drain 10000, leaving 40002
         assert!(app.log_lines.len() <= 50_001);
         assert!(app.log_lines.len() > 40_000);
+    }
+
+    // -- Time range ---------------------------------------------------------
+
+    #[test]
+    fn test_shift_r_opens_time_range_popup() {
+        let mut app = test_app();
+        app.handle_key(key(KeyCode::Char('R')));
+        assert_eq!(app.popup, Some(PopupKind::TimeRange));
+    }
+
+    #[test]
+    fn test_time_range_label() {
+        assert_eq!(TimeRange::All.label(), "All");
+        assert_eq!(
+            TimeRange::Last(Duration::from_secs(5 * 60)).label(),
+            "Last 5m"
+        );
+        assert_eq!(
+            TimeRange::Last(Duration::from_secs(15 * 60)).label(),
+            "Last 15m"
+        );
+        assert_eq!(
+            TimeRange::Last(Duration::from_secs(30 * 60)).label(),
+            "Last 30m"
+        );
+        assert_eq!(
+            TimeRange::Last(Duration::from_secs(60 * 60)).label(),
+            "Last 1h"
+        );
+        assert_eq!(
+            TimeRange::Last(Duration::from_secs(6 * 60 * 60)).label(),
+            "Last 6h"
+        );
+        assert_eq!(
+            TimeRange::Last(Duration::from_secs(24 * 60 * 60)).label(),
+            "Last 24h"
+        );
+    }
+
+    #[test]
+    fn test_time_range_default_is_all() {
+        assert_eq!(TimeRange::default(), TimeRange::All);
+        let app = test_app();
+        assert_eq!(app.time_range, TimeRange::All);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_time_range_all() {
+        let mut app = test_app();
+        app.time_range = TimeRange::All;
+        app.log_lines = vec![
+            "2020-01-01T00:00:00Z old line".to_string(),
+            "no timestamp here".to_string(),
+        ];
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_time_range_excludes_old() {
+        let mut app = test_app();
+        // Set range to last 5 minutes — a timestamp from 2020 should be excluded
+        app.time_range = TimeRange::Last(Duration::from_secs(5 * 60));
+        app.log_lines = vec!["2020-01-01T00:00:00Z ancient log entry".to_string()];
+        let filtered = app.filtered_log_lines();
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_filtered_log_lines_time_range_includes_recent() {
+        let mut app = test_app();
+        app.time_range = TimeRange::Last(Duration::from_secs(60 * 60));
+        // Generate a timestamp that is "now" so it falls within the 1h range
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        app.log_lines = vec![format!("{now} recent log entry")];
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_time_range_includes_unparseable() {
+        let mut app = test_app();
+        app.time_range = TimeRange::Last(Duration::from_secs(5 * 60));
+        app.log_lines = vec![
+            "no timestamp at all".to_string(),
+            "just some text".to_string(),
+        ];
+        // Lines without parseable timestamps are always included
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn test_filtered_log_lines_time_range_with_search() {
+        let mut app = test_app();
+        app.time_range = TimeRange::Last(Duration::from_secs(5 * 60));
+        app.search_query = "error".to_string();
+        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        app.log_lines = vec![
+            format!("{now} INFO: all good"),         // recent but no match
+            format!("{now} ERROR: something broke"), // recent and matches
+            "2020-01-01T00:00:00Z ERROR: ancient".to_string(), // matches but too old
+            "no timestamp ERROR here".to_string(),   // matches, no timestamp (included)
+        ];
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered.len(), 2);
+        assert!(filtered[0].contains("ERROR: something broke"));
+        assert!(filtered[1].contains("no timestamp ERROR here"));
     }
 }

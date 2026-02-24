@@ -79,6 +79,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         "    W          Toggle line wrap",
         "    J          Toggle JSON formatting",
         "    T          Cycle timestamp (UTC/Local/Relative)",
+        "    R          Set time range filter",
         "    t          Cycle theme",
         "",
         "  General:",
