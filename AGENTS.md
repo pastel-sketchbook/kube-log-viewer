@@ -116,6 +116,7 @@ Use the following prefixes:
 - UI functions take `&Frame` (or `&mut Frame`) and `&App` (or `&mut App` for stateful widgets)
 - Use `crossterm` `EventStream` for async-compatible terminal event polling
 - Popups render `Clear` widget first, then content on top
+- **Statusbar**: Keep it minimal — only essential keys (j/k, /, n, c, s, f, w, ?, q). All other keybindings belong in the `?` help overlay only. No theme name tag in the statusbar.
 
 ## K8s Interaction
 - `kube::Client` is `Clone`-cheap -- clone into spawned tasks freely

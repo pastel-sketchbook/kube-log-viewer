@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use crate::app::{App, InputMode, TimeRange, TimestampMode};
+use crate::app::{App, InputMode};
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let theme = app.theme();
@@ -26,25 +26,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             let active = Style::default().fg(theme.accent);
             let follow_label = if app.follow_mode { active } else { label };
             let wide_label = if app.wide_logs { active } else { label };
-            let json_label = if app.json_mode { active } else { label };
-            let ts_label = if app.timestamp_mode != TimestampMode::Utc {
-                active
-            } else {
-                label
-            };
-            let range_label = if app.time_range != TimeRange::All {
-                active
-            } else {
-                label
-            };
 
             Line::from(vec![
-                Span::styled(" ↑↓", key),
+                Span::styled(" j/k", key),
                 Span::styled(" nav  ", label),
-                Span::styled("Enter", key),
-                Span::styled(" select  ", label),
-                Span::styled("Tab", key),
-                Span::styled(" focus  ", label),
                 Span::styled("/", key),
                 Span::styled(" search  ", label),
                 Span::styled("n", key),
@@ -57,19 +42,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" follow  ", follow_label),
                 Span::styled("w", key),
                 Span::styled(" wide  ", wide_label),
-                Span::styled("J", key),
-                Span::styled(" json  ", json_label),
-                Span::styled("T", key),
-                Span::styled(format!(" {}  ", app.timestamp_mode.label()), ts_label),
-                Span::styled("R", key),
-                Span::styled(format!(" {}  ", app.time_range.label()), range_label),
-                Span::styled("t", key),
-                Span::styled(" theme  ", label),
                 Span::styled("?", key),
                 Span::styled(" help  ", label),
                 Span::styled("q", key),
                 Span::styled(" quit", label),
-                Span::styled(format!(" [{}]", theme.name), label),
             ])
         }
     };
