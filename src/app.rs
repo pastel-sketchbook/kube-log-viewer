@@ -473,7 +473,9 @@ impl App {
             }
             AppEvent::Error(msg) => {
                 error!(message = %msg, "background task error");
-                self.error_message = Some(msg.clone());
+                // Show a short, actionable summary in the overlay; keep raw
+                // error in log_lines so the user can scroll back for details.
+                self.error_message = Some(summarize_error(&msg));
                 self.log_lines.push(format!("[ERROR] {}", msg));
             }
         }
@@ -592,6 +594,71 @@ impl App {
             debug!("cancelling active log stream");
             let _ = cancel_tx.send(true);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Error summarisation
+// ---------------------------------------------------------------------------
+
+/// Condense a verbose K8s / Azure error into a short, actionable message.
+///
+/// The raw error is still kept in `log_lines` for debugging; this summary is
+/// what gets shown in the error overlay so it fits the log pane.
+fn summarize_error(raw: &str) -> String {
+    let lower = raw.to_lowercase();
+
+    // Azure auth / az login / kubelogin token errors
+    if lower.contains("az login")
+        || lower.contains("kubelogin")
+        || lower.contains("aadsts")
+        || lower.contains("interactive_browser")
+        || (lower.contains("token") && lower.contains("expir"))
+    {
+        return "Azure credentials expired. Run `az login` then retry.".to_string();
+    }
+
+    // Generic 401 Unauthorized from API server
+    if lower.contains("401") && lower.contains("unauthorized") {
+        return "Unauthorized (401). Check credentials or run `az login`.".to_string();
+    }
+
+    // 403 Forbidden (RBAC)
+    if lower.contains("403") && lower.contains("forbidden") {
+        return "Forbidden (403). Check your RBAC permissions.".to_string();
+    }
+
+    // Connection refused / cluster unreachable
+    if lower.contains("connection refused") || lower.contains("connect error") {
+        return "Connection refused. Is the cluster reachable?".to_string();
+    }
+
+    // DNS / hostname resolution
+    if lower.contains("dns") || lower.contains("resolve") || lower.contains("no such host") {
+        return "DNS resolution failed. Check cluster hostname.".to_string();
+    }
+
+    // TLS / certificate errors
+    if lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") {
+        return "TLS/certificate error. Check cluster CA or kubeconfig.".to_string();
+    }
+
+    // Timeout
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return "Request timed out. Check network or cluster health.".to_string();
+    }
+
+    // Kubeconfig missing / unreadable
+    if lower.contains("kubeconfig") && (lower.contains("not found") || lower.contains("present")) {
+        return "Kubeconfig not found. Is ~/.kube/config present?".to_string();
+    }
+
+    // Fallback: truncate to keep the overlay manageable
+    let max_len = 120;
+    if raw.len() > max_len {
+        format!("{}…  (see log for details)", &raw[..max_len])
+    } else {
+        raw.to_string()
     }
 }
 
@@ -949,8 +1016,13 @@ mod tests {
     fn test_error_shown_in_log_panel() {
         let mut app = test_app();
         app.handle_app_event(AppEvent::Error("connection refused".to_string()));
+        // Raw error preserved in log lines for debugging
         assert_eq!(app.log_lines, vec!["[ERROR] connection refused"]);
-        assert_eq!(app.error_message, Some("connection refused".to_string()));
+        // Overlay shows the summarised, actionable message
+        assert_eq!(
+            app.error_message,
+            Some("Connection refused. Is the cluster reachable?".to_string())
+        );
     }
 
     #[test]

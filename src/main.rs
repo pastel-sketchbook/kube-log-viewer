@@ -9,14 +9,24 @@ use tracing::info;
 
 /// Initialise the tracing subscriber that writes to a daily-rotated log file.
 ///
-/// Logs are stored under `~/.local/share/kube-log-viewer/logs/` (or the
-/// platform-appropriate data directory). The file is named
-/// `kube-log-viewer.YYYY-MM-DD.log` and rotates daily.
+/// Logs are stored under the platform data directory (macOS:
+/// `~/Library/Application Support/kube-log-viewer/logs/`).
+/// On each startup, previous rotated log files are deleted so only the
+/// current session's log remains.
 fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     let data_dir = dirs::data_dir()?.join("kube-log-viewer").join("logs");
 
     // Best-effort directory creation -- if it fails we silently skip tracing
     std::fs::create_dir_all(&data_dir).ok()?;
+
+    // Housekeeping: remove old rotated log files from previous runs.
+    // The daily appender creates files like `kube-log-viewer.log.2026-02-23`.
+    // We delete everything in the directory so today's session starts fresh.
+    if let Ok(entries) = std::fs::read_dir(&data_dir) {
+        for entry in entries.flatten() {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 
     let file_appender = tracing_appender::rolling::daily(&data_dir, "kube-log-viewer.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
