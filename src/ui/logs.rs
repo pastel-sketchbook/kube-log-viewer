@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::app::{App, Focus, InputMode, StreamMode, TimestampMode};
+use crate::app::{App, Focus, InputMode, MAX_STREAMS, StreamMode, TimestampMode};
 use crate::ui::theme::Theme;
 
 /// Matches ISO 8601 / RFC 3339 timestamps at the start of a log line.
@@ -294,14 +294,29 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_split(frame: &mut Frame, app: &App, area: Rect) {
+    let n = app.streams.len().min(MAX_STREAMS);
+    if n == 0 {
+        return;
+    }
+    let pct = (100 / n) as u16;
+    let constraints: Vec<Constraint> = (0..n)
+        .map(|i| {
+            if i == n - 1 {
+                // Last pane absorbs rounding remainder
+                Constraint::Percentage(100 - pct * (n as u16 - 1))
+            } else {
+                Constraint::Percentage(pct)
+            }
+        })
+        .collect();
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints(constraints)
         .split(area);
 
-    render_pane(frame, app, chunks[0], 0);
-    if app.streams.len() >= 2 {
-        render_pane(frame, app, chunks[1], 1);
+    for i in 0..n {
+        render_pane(frame, app, chunks[i], i);
     }
 }
 

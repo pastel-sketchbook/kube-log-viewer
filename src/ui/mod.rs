@@ -101,7 +101,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         "  M          Add pod as stream (merged)",
         "  V          Cycle: Merged/Split/Single",
         "  X          Remove last stream",
-        "  1/2        Switch pane (split mode)",
+        "  1-4        Switch pane (split mode)",
         "",
         "General:",
         "  ?          Toggle this help",

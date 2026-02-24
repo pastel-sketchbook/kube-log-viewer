@@ -128,7 +128,7 @@ pub enum StreamMode {
     Single,
     /// All streams interleaved chronologically, pod tag prefix per line.
     Merged,
-    /// Two horizontal panes (top/bottom), one stream each.
+    /// Stacked horizontal panes (top to bottom), one per stream (up to 4).
     Split,
 }
 
@@ -376,6 +376,16 @@ impl App {
                 if self.stream_mode == StreamMode::Split && self.streams.len() >= 2 =>
             {
                 self.active_pane = 1;
+            }
+            KeyCode::Char('3')
+                if self.stream_mode == StreamMode::Split && self.streams.len() >= 3 =>
+            {
+                self.active_pane = 2;
+            }
+            KeyCode::Char('4')
+                if self.stream_mode == StreamMode::Split && self.streams.len() >= 4 =>
+            {
+                self.active_pane = 3;
             }
             _ => {}
         }
@@ -1863,6 +1873,57 @@ mod tests {
         let mut app = test_app();
         let (tx1, _) = tokio::sync::watch::channel(false);
         let (tx2, _) = tokio::sync::watch::channel(false);
+        let (tx3, _) = tokio::sync::watch::channel(false);
+        let (tx4, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-c".to_string(),
+            container: None,
+            cancel_tx: tx3,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-d".to_string(),
+            container: None,
+            cancel_tx: tx4,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.stream_mode = StreamMode::Split;
+        assert_eq!(app.active_pane, 0);
+
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.active_pane, 1);
+
+        app.handle_key(key(KeyCode::Char('3')));
+        assert_eq!(app.active_pane, 2);
+
+        app.handle_key(key(KeyCode::Char('4')));
+        assert_eq!(app.active_pane, 3);
+
+        app.handle_key(key(KeyCode::Char('1')));
+        assert_eq!(app.active_pane, 0);
+    }
+
+    #[test]
+    fn test_pane_switch_keys_guarded_by_stream_count() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
         app.streams.push(LogStreamHandle {
             pod_name: "pod-a".to_string(),
             container: None,
@@ -1878,12 +1939,11 @@ mod tests {
             follow_mode: true,
         });
         app.stream_mode = StreamMode::Split;
+
+        // '3' and '4' should be no-ops with only 2 streams
+        app.handle_key(key(KeyCode::Char('3')));
         assert_eq!(app.active_pane, 0);
-
-        app.handle_key(key(KeyCode::Char('2')));
-        assert_eq!(app.active_pane, 1);
-
-        app.handle_key(key(KeyCode::Char('1')));
+        app.handle_key(key(KeyCode::Char('4')));
         assert_eq!(app.active_pane, 0);
     }
 
