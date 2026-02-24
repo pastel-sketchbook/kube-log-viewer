@@ -8,8 +8,10 @@ pub enum AppEvent {
     NamespacesLoaded(Vec<String>),
     /// Context list + current context loaded from kubeconfig
     ContextsLoaded(Vec<String>, String),
-    /// A single log line received from a pod's log stream
-    LogLine(String),
+    /// A single log line received from a pod's log stream.
+    /// Fields: (source pod name, log line text).
+    /// Empty source string indicates a system/internal message.
+    LogLine(String, String),
     /// The log stream has ended (pod terminated, stream closed, etc.)
     LogStreamEnded,
     /// `az login` completed (success or failure message)

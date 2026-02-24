@@ -7,7 +7,7 @@ pub mod theme;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Padding, Paragraph};
 
 use crate::app::App;
 
@@ -52,53 +52,69 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 // ---------------------------------------------------------------------------
 
 fn render_help(frame: &mut Frame, app: &App) {
-    let area = centered_rect(60, 80, frame.area());
+    let area = centered_rect(75, 60, frame.area());
     frame.render_widget(Clear, area);
 
     let theme = app.theme();
 
-    let help_text = vec![
-        "Keybindings:",
+    // Outer border with horizontal padding
+    let block = Block::default()
+        .title(" Help ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.popup_border))
+        .padding(Padding::horizontal(2));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // Two-column layout
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(inner);
+
+    let left_text = [
+        "Navigation:",
+        "  j/Down     Move down",
+        "  k/Up       Move up",
+        "  Enter      Select pod / start log stream",
+        "  Tab        Switch focus (Pods <-> Logs)",
+        "  g          Scroll to top (logs)",
+        "  G          Scroll to bottom (logs)",
+        "  PgUp/PgDn  Page up/down (logs)",
         "",
-        "  Navigation:",
-        "    j/Down     Move down",
-        "    k/Up       Move up",
-        "    Enter      Select pod / start log stream",
-        "    Tab        Switch focus (Pods <-> Logs)",
-        "    g          Scroll to top (logs)",
-        "    G          Scroll to bottom (logs)",
-        "    PgUp/PgDn  Page up/down (logs)",
-        "",
-        "  Actions:",
-        "    n          Switch namespace",
-        "    c          Switch context",
-        "    s          Switch container",
-        "    /          Search/filter logs",
-        "    f          Toggle follow mode",
-        "    w          Toggle wide log view",
-        "    W          Toggle line wrap",
-        "    J          Toggle JSON formatting",
-        "    T          Cycle timestamp (UTC/Local/Relative)",
-        "    R          Set time range filter",
-        "    t          Cycle theme",
-        "",
-        "  General:",
-        "    ?          Toggle this help",
-        "    q          Quit",
-        "    Ctrl+C     Force quit",
-        "    Esc        Close popup / clear search",
+        "Actions:",
+        "  n          Switch namespace",
+        "  c          Switch context",
+        "  s          Switch container",
+        "  /          Search/filter logs",
+        "  f          Toggle follow mode",
+        "  w          Toggle wide log view",
+        "  W          Toggle line wrap",
+        "  J          Toggle JSON formatting",
+        "  T          Cycle timestamp mode",
+        "  R          Set time range filter",
+        "  t          Cycle theme",
     ];
 
-    let paragraph = Paragraph::new(help_text.join("\n"))
-        .block(
-            Block::default()
-                .title(" Help ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.popup_border)),
-        )
-        .style(Style::default().fg(theme.fg));
+    let right_text = [
+        "Multi-stream:",
+        "  M          Add pod as stream (merged)",
+        "  V          Cycle: Merged/Split/Single",
+        "  X          Remove last stream",
+        "  1/2        Switch pane (split mode)",
+        "",
+        "General:",
+        "  ?          Toggle this help",
+        "  q          Quit",
+        "  Ctrl+C     Force quit",
+        "  Esc        Close popup / clear search",
+    ];
 
-    frame.render_widget(paragraph, area);
+    let left = Paragraph::new(left_text.join("\n")).style(Style::default().fg(theme.fg));
+    let right = Paragraph::new(right_text.join("\n")).style(Style::default().fg(theme.fg));
+
+    frame.render_widget(left, columns[0]);
+    frame.render_widget(right, columns[1]);
 }
 
 // ---------------------------------------------------------------------------

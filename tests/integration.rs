@@ -115,9 +115,11 @@ async fn test_context_switch_resets_state() {
     // Select a pod and start receiving logs
     app.handle_key(key(KeyCode::Enter));
     app.handle_app_event(AppEvent::LogLine(
+        "web-1".to_string(),
         "2024-01-15T10:00:00Z INFO started".to_string(),
     ));
     app.handle_app_event(AppEvent::LogLine(
+        "web-1".to_string(),
         "2024-01-15T10:00:01Z INFO listening on :8080".to_string(),
     ));
 
@@ -171,7 +173,10 @@ async fn test_namespace_switch_resets_pods_and_logs() {
 
     // Select pod, receive logs
     app.handle_key(key(KeyCode::Enter));
-    app.handle_app_event(AppEvent::LogLine("log line 1".to_string()));
+    app.handle_app_event(AppEvent::LogLine(
+        "api-pod".to_string(),
+        "log line 1".to_string(),
+    ));
 
     // Open namespace popup, switch to staging
     app.handle_key(key(KeyCode::Char('n')));
@@ -224,8 +229,14 @@ async fn test_container_switch_clears_logs() {
     assert_eq!(app.containers.len(), 3);
 
     // Receive some logs from the "app" container
-    app.handle_app_event(AppEvent::LogLine("app: request served".to_string()));
-    app.handle_app_event(AppEvent::LogLine("app: 200 OK".to_string()));
+    app.handle_app_event(AppEvent::LogLine(
+        "multi-pod".to_string(),
+        "app: request served".to_string(),
+    ));
+    app.handle_app_event(AppEvent::LogLine(
+        "multi-pod".to_string(),
+        "app: 200 OK".to_string(),
+    ));
     assert_eq!(app.log_lines.len(), 2);
 
     // Open container popup, switch to istio-proxy (index 1)
@@ -256,8 +267,8 @@ fn test_error_then_recovery() {
 
     // Error appended to log lines as [ERROR] prefix
     assert_eq!(app.log_lines.len(), 1);
-    assert!(app.log_lines[0].starts_with("[ERROR]"));
-    assert!(app.log_lines[0].contains("kubeconfig"));
+    assert!(app.log_lines[0].line.starts_with("[ERROR]"));
+    assert!(app.log_lines[0].line.contains("kubeconfig"));
 
     // Simulate recovery -- namespaces load successfully
     app.handle_app_event(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
@@ -272,8 +283,8 @@ fn test_multiple_errors_accumulate_in_log_lines() {
     app.handle_app_event(AppEvent::Error("error 2".to_string()));
 
     assert_eq!(app.log_lines.len(), 2);
-    assert_eq!(app.log_lines[0], "[ERROR] error 1");
-    assert_eq!(app.log_lines[1], "[ERROR] error 2");
+    assert_eq!(app.log_lines[0].line, "[ERROR] error 1");
+    assert_eq!(app.log_lines[1].line, "[ERROR] error 2");
 }
 
 // ---------------------------------------------------------------------------
@@ -297,7 +308,7 @@ fn test_log_stream_with_search_filter() {
     ];
 
     for line in &log_lines {
-        app.handle_app_event(AppEvent::LogLine(line.to_string()));
+        app.handle_app_event(AppEvent::LogLine(String::new(), line.to_string()));
     }
 
     assert_eq!(app.log_lines.len(), 8);
@@ -317,8 +328,8 @@ fn test_log_stream_with_search_filter() {
 
     let filtered = app.filtered_log_lines();
     assert_eq!(filtered.len(), 2);
-    assert!(filtered[0].contains("timeout after 30s"));
-    assert!(filtered[1].contains("database connection lost"));
+    assert!(filtered[0].line.contains("timeout after 30s"));
+    assert!(filtered[1].line.contains("database connection lost"));
 
     // Clear search with Esc
     app.handle_key(key(KeyCode::Esc));
@@ -338,7 +349,7 @@ fn test_follow_mode_tracks_new_lines() {
 
     // Receive lines -- offset should track latest
     for i in 0..50 {
-        app.handle_app_event(AppEvent::LogLine(format!("line {i}")));
+        app.handle_app_event(AppEvent::LogLine(String::new(), format!("line {i}")));
     }
 
     let offset_after_follow = app.log_scroll_offset;
@@ -351,7 +362,10 @@ fn test_follow_mode_tracks_new_lines() {
     assert!(offset_after_scroll < offset_after_follow);
 
     // New lines arrive but offset stays (not following)
-    app.handle_app_event(AppEvent::LogLine("new line while scrolled up".to_string()));
+    app.handle_app_event(AppEvent::LogLine(
+        String::new(),
+        "new line while scrolled up".to_string(),
+    ));
     assert_eq!(app.log_scroll_offset, offset_after_scroll);
 
     // G re-enables follow
@@ -421,9 +435,10 @@ fn test_log_line_cap_under_sustained_load() {
 
     // Simulate a very chatty pod: 60k lines
     for i in 0..60_000 {
-        app.handle_app_event(AppEvent::LogLine(format!(
-            "2024-01-15T10:00:00Z INFO request {i} processed"
-        )));
+        app.handle_app_event(AppEvent::LogLine(
+            String::new(),
+            format!("2024-01-15T10:00:00Z INFO request {i} processed"),
+        ));
     }
 
     // Cap is 50,000; after exceeding, drains 10,000

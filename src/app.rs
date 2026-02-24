@@ -97,6 +97,63 @@ impl TimeRange {
 }
 
 // ---------------------------------------------------------------------------
+// Multi-stream types
+// ---------------------------------------------------------------------------
+
+/// Maximum number of concurrent log streams.
+pub const MAX_STREAMS: usize = 4;
+
+/// A log line tagged with the source pod name.
+/// Empty `source` indicates a system/internal message (errors, info).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaggedLine {
+    pub source: String,
+    pub line: String,
+}
+
+impl TaggedLine {
+    pub fn system(line: String) -> Self {
+        Self {
+            source: String::new(),
+            line,
+        }
+    }
+}
+
+/// How multiple log streams are displayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamMode {
+    /// One stream, classic single-pod view.
+    #[default]
+    Single,
+    /// All streams interleaved chronologically, pod tag prefix per line.
+    Merged,
+    /// Two horizontal panes (top/bottom), one stream each.
+    Split,
+}
+
+/// Handle to a running log stream background task.
+pub struct LogStreamHandle {
+    pub pod_name: String,
+    pub container: Option<String>,
+    pub cancel_tx: tokio::sync::watch::Sender<bool>,
+    // Per-pane scroll state (used in split mode)
+    pub scroll_offset: usize,
+    pub follow_mode: bool,
+}
+
+impl std::fmt::Debug for LogStreamHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogStreamHandle")
+            .field("pod_name", &self.pod_name)
+            .field("container", &self.container)
+            .field("scroll_offset", &self.scroll_offset)
+            .field("follow_mode", &self.follow_mode)
+            .finish()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------------
 
@@ -127,10 +184,15 @@ pub struct App {
     pub popup_list_state: ListState,
 
     // Log state
-    pub log_lines: Vec<String>,
+    pub log_lines: Vec<TaggedLine>,
     pub selected_pod: Option<String>,
     pub selected_container: Option<String>,
     pub containers: Vec<String>,
+
+    // Multi-stream state
+    pub streams: Vec<LogStreamHandle>,
+    pub stream_mode: StreamMode,
+    pub active_pane: usize,
 
     // Theme
     pub theme_index: usize,
@@ -143,9 +205,6 @@ pub struct App {
 
     // Channel for sending events from background tasks
     tx: mpsc::UnboundedSender<AppEvent>,
-
-    // Log stream cancellation handle
-    log_cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
 
     // Pod watcher cancellation handle
     pod_watcher_cancel: Option<tokio::sync::watch::Sender<bool>>,
@@ -181,13 +240,16 @@ impl App {
             selected_container: None,
             containers: Vec::new(),
 
+            streams: Vec::new(),
+            stream_mode: StreamMode::default(),
+            active_pane: 0,
+
             theme_index: 0,
 
             az_login_in_progress: false,
 
             should_quit: false,
             tx,
-            log_cancel_tx: None,
             pod_watcher_cancel: None,
         }
     }
@@ -234,7 +296,7 @@ impl App {
         }
 
         // Clean up any running background tasks
-        app.cancel_log_stream();
+        app.cancel_all_streams();
         app.cancel_pod_watcher();
         Ok(())
     }
@@ -268,7 +330,15 @@ impl App {
                 self.input_mode = InputMode::Search;
                 self.search_query.clear();
             }
-            KeyCode::Char('f') => self.follow_mode = !self.follow_mode,
+            KeyCode::Char('f') => {
+                if self.stream_mode == StreamMode::Split {
+                    if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                        handle.follow_mode = !handle.follow_mode;
+                    }
+                } else {
+                    self.follow_mode = !self.follow_mode;
+                }
+            }
             KeyCode::Char('w') => self.wide_logs = !self.wide_logs,
             KeyCode::Char('W') => self.wrap_lines = !self.wrap_lines,
             KeyCode::Char('J') => self.json_mode = !self.json_mode,
@@ -295,6 +365,18 @@ impl App {
             KeyCode::Char('g') => self.scroll_to_top(),
             KeyCode::PageUp => self.page_up(),
             KeyCode::PageDown => self.page_down(),
+            // Multi-stream keybindings
+            KeyCode::Char('M') => self.add_stream(),
+            KeyCode::Char('V') => self.cycle_view(),
+            KeyCode::Char('X') => self.remove_last_stream(),
+            KeyCode::Char('1') if self.stream_mode == StreamMode::Split => {
+                self.active_pane = 0;
+            }
+            KeyCode::Char('2')
+                if self.stream_mode == StreamMode::Split && self.streams.len() >= 2 =>
+            {
+                self.active_pane = 1;
+            }
             _ => {}
         }
     }
@@ -342,8 +424,15 @@ impl App {
                 }
             }
             Focus::Logs => {
-                self.follow_mode = false;
-                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(1);
+                if self.stream_mode == StreamMode::Split {
+                    if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                        handle.follow_mode = false;
+                        handle.scroll_offset = handle.scroll_offset.saturating_sub(1);
+                    }
+                } else {
+                    self.follow_mode = false;
+                    self.log_scroll_offset = self.log_scroll_offset.saturating_sub(1);
+                }
             }
         }
     }
@@ -358,10 +447,23 @@ impl App {
                 }
             }
             Focus::Logs => {
-                self.follow_mode = false;
-                let max = self.filtered_log_lines().len().saturating_sub(1);
-                if self.log_scroll_offset < max {
-                    self.log_scroll_offset += 1;
+                if self.stream_mode == StreamMode::Split {
+                    let max = self
+                        .filtered_log_lines_for_pane(self.active_pane)
+                        .len()
+                        .saturating_sub(1);
+                    if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                        handle.follow_mode = false;
+                        if handle.scroll_offset < max {
+                            handle.scroll_offset += 1;
+                        }
+                    }
+                } else {
+                    self.follow_mode = false;
+                    let max = self.filtered_log_lines().len().saturating_sub(1);
+                    if self.log_scroll_offset < max {
+                        self.log_scroll_offset += 1;
+                    }
                 }
             }
         }
@@ -369,29 +471,64 @@ impl App {
 
     fn scroll_to_bottom(&mut self) {
         if self.focus == Focus::Logs {
-            self.follow_mode = true;
-            self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
+            if self.stream_mode == StreamMode::Split {
+                let max = self
+                    .filtered_log_lines_for_pane(self.active_pane)
+                    .len()
+                    .saturating_sub(1);
+                if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                    handle.follow_mode = true;
+                    handle.scroll_offset = max;
+                }
+            } else {
+                self.follow_mode = true;
+                self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
+            }
         }
     }
 
     fn scroll_to_top(&mut self) {
         if self.focus == Focus::Logs {
-            self.follow_mode = false;
-            self.log_scroll_offset = 0;
+            if self.stream_mode == StreamMode::Split {
+                if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                    handle.follow_mode = false;
+                    handle.scroll_offset = 0;
+                }
+            } else {
+                self.follow_mode = false;
+                self.log_scroll_offset = 0;
+            }
         }
     }
 
     fn page_up(&mut self) {
         if self.focus == Focus::Logs {
-            self.follow_mode = false;
-            self.log_scroll_offset = self.log_scroll_offset.saturating_sub(20);
+            if self.stream_mode == StreamMode::Split {
+                if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                    handle.follow_mode = false;
+                    handle.scroll_offset = handle.scroll_offset.saturating_sub(20);
+                }
+            } else {
+                self.follow_mode = false;
+                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(20);
+            }
         }
     }
 
     fn page_down(&mut self) {
         if self.focus == Focus::Logs {
-            let max = self.filtered_log_lines().len().saturating_sub(1);
-            self.log_scroll_offset = (self.log_scroll_offset + 20).min(max);
+            if self.stream_mode == StreamMode::Split {
+                let max = self
+                    .filtered_log_lines_for_pane(self.active_pane)
+                    .len()
+                    .saturating_sub(1);
+                if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                    handle.scroll_offset = (handle.scroll_offset + 20).min(max);
+                }
+            } else {
+                let max = self.filtered_log_lines().len().saturating_sub(1);
+                self.log_scroll_offset = (self.log_scroll_offset + 20).min(max);
+            }
         }
     }
 
@@ -414,6 +551,8 @@ impl App {
         self.log_lines.clear();
         self.log_scroll_offset = 0;
         self.follow_mode = true;
+        self.stream_mode = StreamMode::Single;
+        self.active_pane = 0;
 
         let container = containers.first().cloned();
         self.selected_container = container.clone();
@@ -473,7 +612,9 @@ impl App {
                     self.selected_container = None;
                     self.log_lines.clear();
                     self.containers.clear();
-                    self.cancel_log_stream();
+                    self.stream_mode = StreamMode::Single;
+                    self.active_pane = 0;
+                    self.cancel_all_streams();
                     self.start_pod_watcher();
                 }
             }
@@ -488,7 +629,9 @@ impl App {
                     self.pods.clear();
                     self.namespaces.clear();
                     self.containers.clear();
-                    self.cancel_log_stream();
+                    self.stream_mode = StreamMode::Single;
+                    self.active_pane = 0;
+                    self.cancel_all_streams();
                     self.load_namespaces();
                     self.start_pod_watcher();
                 }
@@ -500,6 +643,8 @@ impl App {
                     self.log_lines.clear();
                     self.log_scroll_offset = 0;
                     self.follow_mode = true;
+                    self.stream_mode = StreamMode::Single;
+                    self.active_pane = 0;
 
                     if let Some(pod) = self.selected_pod.clone() {
                         let container = self.selected_container.clone();
@@ -561,8 +706,8 @@ impl App {
                     None => self.pod_list_state.select(None),
                 }
             }
-            AppEvent::LogLine(line) => {
-                self.log_lines.push(line);
+            AppEvent::LogLine(source, line) => {
+                self.log_lines.push(TaggedLine { source, line });
                 if self.follow_mode {
                     self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
                 }
@@ -579,29 +724,31 @@ impl App {
                 self.az_login_in_progress = false;
                 match result {
                     Ok(()) => {
-                        self.log_lines.push(
+                        self.log_lines.push(TaggedLine::system(
                             "[INFO] az login succeeded — reloading cluster data…".to_string(),
-                        );
+                        ));
                         self.load_contexts();
                     }
                     Err(msg) => {
                         error!(message = %msg, "az login failed");
-                        self.log_lines
-                            .push(format!("[ERROR] az login failed: {msg}"));
+                        self.log_lines.push(TaggedLine::system(format!(
+                            "[ERROR] az login failed: {msg}"
+                        )));
                     }
                 }
             }
             AppEvent::Error(msg) => {
                 error!(message = %msg, "background task error");
                 if is_auth_error(&msg) {
-                    self.log_lines.push(format!(
+                    self.log_lines.push(TaggedLine::system(format!(
                         "[ERROR] {msg} (Azure credentials expired — run `az login`)"
-                    ));
+                    )));
                     if !self.az_login_in_progress {
                         self.spawn_az_login();
                     }
                 } else {
-                    self.log_lines.push(format!("[ERROR] {msg}"));
+                    self.log_lines
+                        .push(TaggedLine::system(format!("[ERROR] {msg}")));
                 }
             }
         }
@@ -617,7 +764,7 @@ impl App {
         self.theme_index = (self.theme_index + 1) % THEMES.len();
     }
 
-    pub fn filtered_log_lines(&self) -> Vec<&str> {
+    pub fn filtered_log_lines(&self) -> Vec<&TaggedLine> {
         let search_lower = if self.search_query.is_empty() {
             None
         } else {
@@ -634,24 +781,39 @@ impl App {
 
         self.log_lines
             .iter()
-            .filter(|line| {
+            .filter(|tl| {
                 // Search filter
                 if let Some(ref lower) = search_lower
-                    && !line.to_lowercase().contains(lower)
+                    && !tl.line.to_lowercase().contains(lower)
                 {
                     return false;
                 }
                 // Time range filter
                 if let Some(cutoff_dt) = cutoff
-                    && let Some(m) = ui::logs::TIMESTAMP_RE.find(line.as_str())
-                    && let Some(dt) = ui::logs::parse_log_timestamp(&line[..m.end()])
+                    && let Some(m) = ui::logs::TIMESTAMP_RE.find(&tl.line)
+                    && let Some(dt) = ui::logs::parse_log_timestamp(&tl.line[..m.end()])
                 {
                     return dt >= cutoff_dt;
                 }
                 // Lines without parseable timestamps are always included
                 true
             })
-            .map(|s| s.as_str())
+            .collect()
+    }
+
+    /// Filter log lines for a specific pane in split mode.
+    /// Returns lines whose source matches the stream handle at `pane_idx`.
+    /// System messages (empty source) are included in all panes.
+    pub fn filtered_log_lines_for_pane(&self, pane_idx: usize) -> Vec<&TaggedLine> {
+        let source = self
+            .streams
+            .get(pane_idx)
+            .map(|h| h.pod_name.as_str())
+            .unwrap_or("");
+
+        self.filtered_log_lines()
+            .into_iter()
+            .filter(|tl| tl.source.is_empty() || tl.source == source)
             .collect()
     }
 
@@ -717,12 +879,26 @@ impl App {
         }
     }
 
-    fn start_log_stream(&mut self, pod_name: &str, container: Option<&str>) {
-        info!(pod = pod_name, container = container, "starting log stream");
-        self.cancel_log_stream();
+    /// Cancel all active log streams and drain the stream handle list.
+    fn cancel_all_streams(&mut self) {
+        for handle in self.streams.drain(..) {
+            debug!(pod = %handle.pod_name, "cancelling log stream");
+            let _ = handle.cancel_tx.send(true);
+        }
+    }
 
+    /// Spawn a new log stream task for the given pod/container.
+    /// Pushes a `LogStreamHandle` into `self.streams`.
+    fn spawn_log_stream(&mut self, pod_name: &str, container: Option<&str>) {
         let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
-        self.log_cancel_tx = Some(cancel_tx);
+
+        self.streams.push(LogStreamHandle {
+            pod_name: pod_name.to_string(),
+            container: container.map(|s| s.to_string()),
+            cancel_tx,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
 
         let tx = self.tx.clone();
         let context = self.current_context.clone();
@@ -752,10 +928,77 @@ impl App {
         });
     }
 
-    fn cancel_log_stream(&mut self) {
-        if let Some(cancel_tx) = self.log_cancel_tx.take() {
-            debug!("cancelling active log stream");
-            let _ = cancel_tx.send(true);
+    /// Cancel all existing streams, then start a single new one (backward compat).
+    fn start_log_stream(&mut self, pod_name: &str, container: Option<&str>) {
+        info!(pod = pod_name, container = container, "starting log stream");
+        self.cancel_all_streams();
+        self.spawn_log_stream(pod_name, container);
+    }
+
+    /// `M` key handler: add the currently selected pod as an additional stream.
+    /// Switches to Merged mode. Enforces MAX_STREAMS limit.
+    fn add_stream(&mut self) {
+        if self.focus != Focus::Pods {
+            return;
+        }
+        let Some(i) = self.pod_list_state.selected() else {
+            return;
+        };
+        let Some(pod) = self.pods.get(i) else { return };
+
+        if self.streams.len() >= MAX_STREAMS {
+            self.log_lines.push(TaggedLine::system(format!(
+                "[INFO] Maximum {MAX_STREAMS} concurrent streams reached"
+            )));
+            return;
+        }
+
+        // Don't add the same pod twice
+        let pod_name = pod.name.clone();
+        if self.streams.iter().any(|h| h.pod_name == pod_name) {
+            return;
+        }
+
+        let container = pod.containers.first().cloned();
+        info!(pod = %pod_name, "adding stream");
+        self.spawn_log_stream(&pod_name, container.as_deref());
+        self.stream_mode = StreamMode::Merged;
+    }
+
+    /// `V` key handler: cycle view mode (Merged → Split → Single).
+    /// Only meaningful when ≥2 streams are active.
+    fn cycle_view(&mut self) {
+        if self.streams.len() < 2 {
+            return;
+        }
+        self.stream_mode = match self.stream_mode {
+            StreamMode::Single => StreamMode::Merged,
+            StreamMode::Merged => StreamMode::Split,
+            StreamMode::Split => StreamMode::Single,
+        };
+        // Clamp active_pane
+        if self.active_pane >= self.streams.len() {
+            self.active_pane = 0;
+        }
+    }
+
+    /// `X` key handler: remove the most recently added stream.
+    /// Returns to Single mode when only one stream remains.
+    fn remove_last_stream(&mut self) {
+        if self.streams.len() <= 1 {
+            return;
+        }
+        if let Some(handle) = self.streams.pop() {
+            debug!(pod = %handle.pod_name, "removing stream");
+            let _ = handle.cancel_tx.send(true);
+        }
+        if self.streams.len() <= 1 {
+            self.stream_mode = StreamMode::Single;
+            self.active_pane = 0;
+        }
+        // Clamp active pane
+        if self.active_pane >= self.streams.len() {
+            self.active_pane = self.streams.len().saturating_sub(1);
         }
     }
 
@@ -763,8 +1006,9 @@ impl App {
     /// when it finishes. Opens the default browser for interactive auth.
     fn spawn_az_login(&mut self) {
         self.az_login_in_progress = true;
-        self.log_lines
-            .push("[INFO] Azure credentials expired — opening browser for login…".to_string());
+        self.log_lines.push(TaggedLine::system(
+            "[INFO] Azure credentials expired — opening browser for login…".to_string(),
+        ));
         info!("spawning az login");
 
         let tx = self.tx.clone();
@@ -833,6 +1077,22 @@ mod tests {
 
     fn ctrl_key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::CONTROL)
+    }
+
+    /// Helper to create a TaggedLine with empty source (system message).
+    fn tl(line: &str) -> TaggedLine {
+        TaggedLine {
+            source: String::new(),
+            line: line.to_string(),
+        }
+    }
+
+    /// Helper to create a TaggedLine with a specific source.
+    fn tl_src(source: &str, line: &str) -> TaggedLine {
+        TaggedLine {
+            source: source.to_string(),
+            line: line.to_string(),
+        }
     }
 
     fn test_app() -> App {
@@ -1078,7 +1338,7 @@ mod tests {
         let mut app = test_app();
         app.focus = Focus::Logs;
         app.follow_mode = false;
-        app.log_lines = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        app.log_lines = vec![tl("a"), tl("b"), tl("c")];
         app.handle_key(key(KeyCode::Char('G')));
         assert!(app.follow_mode);
     }
@@ -1127,37 +1387,40 @@ mod tests {
     #[test]
     fn test_filtered_log_lines_no_query() {
         let mut app = test_app();
-        app.log_lines = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+        app.log_lines = vec![tl("alpha"), tl("beta"), tl("gamma")];
         let filtered = app.filtered_log_lines();
-        assert_eq!(filtered, vec!["alpha", "beta", "gamma"]);
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(lines, vec!["alpha", "beta", "gamma"]);
     }
 
     #[test]
     fn test_filtered_log_lines_with_query() {
         let mut app = test_app();
         app.log_lines = vec![
-            "INFO: started".to_string(),
-            "ERROR: failed".to_string(),
-            "INFO: completed".to_string(),
+            tl("INFO: started"),
+            tl("ERROR: failed"),
+            tl("INFO: completed"),
         ];
         app.search_query = "error".to_string();
         let filtered = app.filtered_log_lines();
-        assert_eq!(filtered, vec!["ERROR: failed"]);
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(lines, vec!["ERROR: failed"]);
     }
 
     #[test]
     fn test_filtered_log_lines_case_insensitive() {
         let mut app = test_app();
-        app.log_lines = vec!["Error occurred".to_string(), "all good".to_string()];
+        app.log_lines = vec![tl("Error occurred"), tl("all good")];
         app.search_query = "ERROR".to_string();
         let filtered = app.filtered_log_lines();
-        assert_eq!(filtered, vec!["Error occurred"]);
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(lines, vec!["Error occurred"]);
     }
 
     #[test]
     fn test_filtered_log_lines_no_match() {
         let mut app = test_app();
-        app.log_lines = vec!["hello world".to_string()];
+        app.log_lines = vec![tl("hello world")];
         app.search_query = "xyz".to_string();
         let filtered = app.filtered_log_lines();
         assert!(filtered.is_empty());
@@ -1207,15 +1470,17 @@ mod tests {
     #[test]
     fn test_log_line_appended() {
         let mut app = test_app();
-        app.handle_app_event(AppEvent::LogLine("hello".to_string()));
-        assert_eq!(app.log_lines, vec!["hello"]);
+        app.handle_app_event(AppEvent::LogLine(String::new(), "hello".to_string()));
+        assert_eq!(app.log_lines.len(), 1);
+        assert_eq!(app.log_lines[0].line, "hello");
     }
 
     #[test]
     fn test_error_shown_in_log_lines() {
         let mut app = test_app();
         app.handle_app_event(AppEvent::Error("connection refused".to_string()));
-        assert_eq!(app.log_lines, vec!["[ERROR] connection refused"]);
+        assert_eq!(app.log_lines.len(), 1);
+        assert_eq!(app.log_lines[0].line, "[ERROR] connection refused");
     }
 
     #[test]
@@ -1241,7 +1506,7 @@ mod tests {
         assert!(
             app.log_lines
                 .last()
-                .is_some_and(|l| l.contains("succeeded"))
+                .is_some_and(|tl| tl.line.contains("succeeded"))
         );
     }
 
@@ -1254,7 +1519,7 @@ mod tests {
         assert!(
             app.log_lines
                 .last()
-                .is_some_and(|l| l.contains("az login failed"))
+                .is_some_and(|tl| tl.line.contains("az login failed"))
         );
     }
 
@@ -1262,9 +1527,9 @@ mod tests {
     fn test_log_line_cap() {
         let mut app = test_app();
         for i in 0..50_001 {
-            app.log_lines.push(format!("line {i}"));
+            app.log_lines.push(tl(&format!("line {i}")));
         }
-        app.handle_app_event(AppEvent::LogLine("overflow".to_string()));
+        app.handle_app_event(AppEvent::LogLine(String::new(), "overflow".to_string()));
         // After adding one more (total 50002), drain 10000, leaving 40002
         assert!(app.log_lines.len() <= 50_001);
         assert!(app.log_lines.len() > 40_000);
@@ -1319,10 +1584,7 @@ mod tests {
     fn test_filtered_log_lines_time_range_all() {
         let mut app = test_app();
         app.time_range = TimeRange::All;
-        app.log_lines = vec![
-            "2020-01-01T00:00:00Z old line".to_string(),
-            "no timestamp here".to_string(),
-        ];
+        app.log_lines = vec![tl("2020-01-01T00:00:00Z old line"), tl("no timestamp here")];
         let filtered = app.filtered_log_lines();
         assert_eq!(filtered.len(), 2);
     }
@@ -1332,7 +1594,7 @@ mod tests {
         let mut app = test_app();
         // Set range to last 5 minutes — a timestamp from 2020 should be excluded
         app.time_range = TimeRange::Last(Duration::from_secs(5 * 60));
-        app.log_lines = vec!["2020-01-01T00:00:00Z ancient log entry".to_string()];
+        app.log_lines = vec![tl("2020-01-01T00:00:00Z ancient log entry")];
         let filtered = app.filtered_log_lines();
         assert!(filtered.is_empty());
     }
@@ -1343,7 +1605,7 @@ mod tests {
         app.time_range = TimeRange::Last(Duration::from_secs(60 * 60));
         // Generate a timestamp that is "now" so it falls within the 1h range
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
-        app.log_lines = vec![format!("{now} recent log entry")];
+        app.log_lines = vec![tl(&format!("{now} recent log entry"))];
         let filtered = app.filtered_log_lines();
         assert_eq!(filtered.len(), 1);
     }
@@ -1352,10 +1614,7 @@ mod tests {
     fn test_filtered_log_lines_time_range_includes_unparseable() {
         let mut app = test_app();
         app.time_range = TimeRange::Last(Duration::from_secs(5 * 60));
-        app.log_lines = vec![
-            "no timestamp at all".to_string(),
-            "just some text".to_string(),
-        ];
+        app.log_lines = vec![tl("no timestamp at all"), tl("just some text")];
         // Lines without parseable timestamps are always included
         let filtered = app.filtered_log_lines();
         assert_eq!(filtered.len(), 2);
@@ -1368,15 +1627,15 @@ mod tests {
         app.search_query = "error".to_string();
         let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
         app.log_lines = vec![
-            format!("{now} INFO: all good"),         // recent but no match
-            format!("{now} ERROR: something broke"), // recent and matches
-            "2020-01-01T00:00:00Z ERROR: ancient".to_string(), // matches but too old
-            "no timestamp ERROR here".to_string(),   // matches, no timestamp (included)
+            tl(&format!("{now} INFO: all good")), // recent but no match
+            tl(&format!("{now} ERROR: something broke")), // recent and matches
+            tl("2020-01-01T00:00:00Z ERROR: ancient"), // matches but too old
+            tl("no timestamp ERROR here"),        // matches, no timestamp (included)
         ];
         let filtered = app.filtered_log_lines();
         assert_eq!(filtered.len(), 2);
-        assert!(filtered[0].contains("ERROR: something broke"));
-        assert!(filtered[1].contains("no timestamp ERROR here"));
+        assert!(filtered[0].line.contains("ERROR: something broke"));
+        assert!(filtered[1].line.contains("no timestamp ERROR here"));
     }
 
     // -- Pod watcher / selection preservation --------------------------------
@@ -1449,5 +1708,235 @@ mod tests {
         ]));
         assert_eq!(app.pod_list_state.selected(), Some(0)); // still "pod-a"
         assert_eq!(app.pods.len(), 2);
+    }
+
+    // -- Multi-stream -------------------------------------------------------
+
+    #[test]
+    fn test_tagged_line_system() {
+        let tl = TaggedLine::system("hello".to_string());
+        assert!(tl.source.is_empty());
+        assert_eq!(tl.line, "hello");
+    }
+
+    #[test]
+    fn test_stream_mode_default_is_single() {
+        let app = test_app();
+        assert_eq!(app.stream_mode, StreamMode::Single);
+        assert_eq!(app.active_pane, 0);
+        assert!(app.streams.is_empty());
+    }
+
+    #[test]
+    fn test_cycle_view_requires_two_streams() {
+        let mut app = test_app();
+        // No streams — cycle_view should be a no-op
+        app.cycle_view();
+        assert_eq!(app.stream_mode, StreamMode::Single);
+    }
+
+    #[test]
+    fn test_cycle_view_cycles_modes() {
+        let mut app = test_app();
+        // Fake 2 stream handles (no real tokio tasks needed for mode cycling)
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+
+        app.stream_mode = StreamMode::Single;
+        app.cycle_view();
+        assert_eq!(app.stream_mode, StreamMode::Merged);
+        app.cycle_view();
+        assert_eq!(app.stream_mode, StreamMode::Split);
+        app.cycle_view();
+        assert_eq!(app.stream_mode, StreamMode::Single);
+    }
+
+    #[test]
+    fn test_remove_last_stream_returns_to_single() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.stream_mode = StreamMode::Merged;
+
+        app.remove_last_stream();
+        assert_eq!(app.streams.len(), 1);
+        assert_eq!(app.stream_mode, StreamMode::Single);
+        assert_eq!(app.streams[0].pod_name, "pod-a");
+    }
+
+    #[test]
+    fn test_remove_last_stream_noop_with_one() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+
+        app.remove_last_stream();
+        assert_eq!(app.streams.len(), 1); // no-op, can't remove last
+    }
+
+    #[test]
+    fn test_filtered_log_lines_for_pane() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+
+        app.log_lines = vec![
+            tl_src("pod-a", "line from a"),
+            tl_src("pod-b", "line from b"),
+            TaggedLine::system("[INFO] system msg".to_string()),
+            tl_src("pod-a", "another from a"),
+        ];
+
+        // Pane 0 = pod-a: should see pod-a lines + system messages
+        let pane0 = app.filtered_log_lines_for_pane(0);
+        assert_eq!(pane0.len(), 3);
+        assert_eq!(pane0[0].line, "line from a");
+        assert_eq!(pane0[1].line, "[INFO] system msg");
+        assert_eq!(pane0[2].line, "another from a");
+
+        // Pane 1 = pod-b: should see pod-b lines + system messages
+        let pane1 = app.filtered_log_lines_for_pane(1);
+        assert_eq!(pane1.len(), 2);
+        assert_eq!(pane1[0].line, "line from b");
+        assert_eq!(pane1[1].line, "[INFO] system msg");
+    }
+
+    #[test]
+    fn test_log_line_event_stores_source() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::LogLine("my-pod".to_string(), "hello".to_string()));
+        assert_eq!(app.log_lines.len(), 1);
+        assert_eq!(app.log_lines[0].source, "my-pod");
+        assert_eq!(app.log_lines[0].line, "hello");
+    }
+
+    #[test]
+    fn test_pane_switch_keys_in_split_mode() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.stream_mode = StreamMode::Split;
+        assert_eq!(app.active_pane, 0);
+
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.active_pane, 1);
+
+        app.handle_key(key(KeyCode::Char('1')));
+        assert_eq!(app.active_pane, 0);
+    }
+
+    #[test]
+    fn test_pane_switch_keys_ignored_outside_split() {
+        let mut app = test_app();
+        app.stream_mode = StreamMode::Merged;
+        app.handle_key(key(KeyCode::Char('2')));
+        assert_eq!(app.active_pane, 0); // no change
+    }
+
+    #[test]
+    fn test_f_toggle_in_split_mode() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.stream_mode = StreamMode::Split;
+        app.active_pane = 0;
+
+        assert!(app.streams[0].follow_mode);
+        app.handle_key(key(KeyCode::Char('f')));
+        assert!(!app.streams[0].follow_mode);
+        app.handle_key(key(KeyCode::Char('f')));
+        assert!(app.streams[0].follow_mode);
+    }
+
+    #[test]
+    fn test_cancel_all_streams_drains_vec() {
+        let mut app = test_app();
+        let (tx1, _) = tokio::sync::watch::channel(false);
+        let (tx2, _) = tokio::sync::watch::channel(false);
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-a".to_string(),
+            container: None,
+            cancel_tx: tx1,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+        app.streams.push(LogStreamHandle {
+            pod_name: "pod-b".to_string(),
+            container: None,
+            cancel_tx: tx2,
+            scroll_offset: 0,
+            follow_mode: true,
+        });
+
+        app.cancel_all_streams();
+        assert!(app.streams.is_empty());
     }
 }

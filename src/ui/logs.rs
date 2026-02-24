@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use regex::Regex;
 use serde_json::Value;
 
-use crate::app::{App, Focus, InputMode, TimestampMode};
+use crate::app::{App, Focus, InputMode, StreamMode, TimestampMode};
 use crate::ui::theme::Theme;
 
 /// Matches ISO 8601 / RFC 3339 timestamps at the start of a log line.
@@ -132,7 +132,35 @@ fn strip_duplicate_timestamp(line: &str) -> &str {
     line
 }
 
+/// Stream colors for multi-stream mode pod tags.
+const STREAM_COLORS: &[Color] = &[
+    Color::Cyan,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Green,
+    Color::Red,
+    Color::Blue,
+];
+
+/// Get the color for a stream source based on its index in the streams list.
+fn stream_color(app: &App, source: &str) -> Color {
+    let idx = app
+        .streams
+        .iter()
+        .position(|h| h.pod_name == source)
+        .unwrap_or(0);
+    STREAM_COLORS[idx % STREAM_COLORS.len()]
+}
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
+    if app.stream_mode == StreamMode::Split && app.streams.len() >= 2 {
+        render_split(frame, app, area);
+    } else {
+        render_single_or_merged(frame, app, area);
+    }
+}
+
+fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
     let title = match (&app.selected_pod, &app.selected_container) {
         (Some(pod), Some(container)) => format!(" Logs: {} / {} ", pod, container),
         (Some(pod), None) => format!(" Logs: {} ", pod),
@@ -145,7 +173,17 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         _ => theme.border_unfocused,
     };
 
+    let is_merged = app.stream_mode == StreamMode::Merged && app.streams.len() > 1;
+
     let mut title_spans: Vec<Span> = vec![Span::styled(title, Style::default().fg(theme.accent))];
+    if is_merged {
+        title_spans.push(Span::styled(
+            " [MERGED] ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     if app.follow_mode {
         title_spans.push(Span::styled(
             " [FOLLOW] ",
@@ -175,12 +213,152 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     // Apply JSON flattening (if enabled) before colorization.
     // Formatted strings must outlive the Span references, so collect first.
+    let formatted: Vec<(Option<&str>, Cow<str>)> = filtered_lines
+        .iter()
+        .skip(scroll_offset)
+        .take(inner_height)
+        .map(|tl| {
+            let line = strip_duplicate_timestamp(&tl.line);
+            let source = if is_merged && !tl.source.is_empty() {
+                Some(tl.source.as_str())
+            } else {
+                None
+            };
+            let formatted = if app.json_mode {
+                format_json_line(line)
+            } else {
+                Cow::Borrowed(line)
+            };
+            (source, formatted)
+        })
+        .collect();
+
+    let visible_lines: Vec<Line> = formatted
+        .iter()
+        .enumerate()
+        .map(|(i, (source, line))| {
+            let s: &str = line.as_ref();
+            let mut spans: Vec<Span> = Vec::new();
+
+            // Prepend pod tag in merged mode
+            if let Some(src) = source {
+                let color = stream_color(app, src);
+                // Truncate to last 20 chars for compact display
+                let tag = if src.len() > 20 {
+                    &src[src.len() - 20..]
+                } else {
+                    src
+                };
+                spans.push(Span::styled(
+                    format!("[{tag}] "),
+                    Style::default().fg(color).add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            let line_spans = if !app.search_query.is_empty() {
+                let hl = highlight_search(s, &app.search_query, theme, app.timestamp_mode);
+                hl.spans
+            } else {
+                colorize_log_line(s, theme, app.timestamp_mode)
+                    .into_iter()
+                    .map(|sp| Span::from(sp.content.into_owned()).style(sp.style))
+                    .collect()
+            };
+            spans.extend(line_spans);
+
+            let mut styled = Line::from(spans);
+            if i % 2 == 1 {
+                styled = styled.style(Style::default().bg(theme.zebra_bg));
+            }
+            styled
+        })
+        .collect();
+
+    let block = Block::default()
+        .title(Line::from(title_spans))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let mut paragraph = Paragraph::new(visible_lines).block(block);
+
+    if app.wrap_lines {
+        paragraph = paragraph.wrap(Wrap { trim: false });
+    }
+
+    frame.render_widget(paragraph, area);
+
+    // Render search input bar when in search mode
+    if app.input_mode == InputMode::Search {
+        render_search_input(frame, app, area);
+    }
+}
+
+fn render_split(frame: &mut Frame, app: &App, area: Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    render_pane(frame, app, chunks[0], 0);
+    if app.streams.len() >= 2 {
+        render_pane(frame, app, chunks[1], 1);
+    }
+}
+
+fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
+    let theme = app.theme();
+    let is_active = pane_idx == app.active_pane;
+
+    let handle = match app.streams.get(pane_idx) {
+        Some(h) => h,
+        None => return,
+    };
+
+    let title = match &handle.container {
+        Some(c) => format!(" [{}] {} / {} ", pane_idx + 1, handle.pod_name, c),
+        None => format!(" [{}] {} ", pane_idx + 1, handle.pod_name),
+    };
+
+    let border_color = if is_active && app.focus == Focus::Logs {
+        theme.border_focused
+    } else {
+        theme.border_unfocused
+    };
+
+    let mut title_spans: Vec<Span> = vec![Span::styled(title, Style::default().fg(theme.accent))];
+    if handle.follow_mode {
+        title_spans.push(Span::styled(
+            " [FOLLOW] ",
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if is_active && !app.search_query.is_empty() {
+        title_spans.push(Span::styled(
+            format!(" [/{}] ", app.search_query),
+            Style::default().fg(theme.search_fg),
+        ));
+    }
+
+    let filtered_lines = app.filtered_log_lines_for_pane(pane_idx);
+    let total_lines = filtered_lines.len();
+
+    let inner_height = area.height.saturating_sub(2) as usize;
+    let scroll_offset = if handle.follow_mode {
+        total_lines.saturating_sub(inner_height)
+    } else {
+        handle
+            .scroll_offset
+            .min(total_lines.saturating_sub(inner_height))
+    };
+
     let formatted: Vec<Cow<str>> = filtered_lines
         .iter()
         .skip(scroll_offset)
         .take(inner_height)
-        .map(|line| {
-            let line = strip_duplicate_timestamp(line);
+        .map(|tl| {
+            let line = strip_duplicate_timestamp(&tl.line);
             if app.json_mode {
                 format_json_line(line)
             } else {
@@ -194,7 +372,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, line)| {
             let s: &str = line.as_ref();
-            let mut styled = if !app.search_query.is_empty() {
+            let mut styled = if !app.search_query.is_empty() && is_active {
                 highlight_search(s, &app.search_query, theme, app.timestamp_mode)
             } else {
                 Line::from(colorize_log_line(s, theme, app.timestamp_mode))
@@ -219,8 +397,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     frame.render_widget(paragraph, area);
 
-    // Render search input bar when in search mode
-    if app.input_mode == InputMode::Search {
+    // Render search input in the active pane only
+    if is_active && app.input_mode == InputMode::Search {
         render_search_input(frame, app, area);
     }
 }

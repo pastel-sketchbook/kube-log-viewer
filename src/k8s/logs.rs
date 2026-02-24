@@ -50,7 +50,7 @@ pub async fn stream_logs(
                     Some(Ok(text)) => {
                         if !text.is_empty() {
                             line_count += 1;
-                            let _ = tx.send(AppEvent::LogLine(text));
+                            let _ = tx.send(AppEvent::LogLine(pod_name.to_string(), text));
                         }
                     }
                     Some(Err(e)) => {
