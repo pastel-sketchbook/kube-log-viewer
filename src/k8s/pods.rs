@@ -1,9 +1,16 @@
+use std::collections::BTreeMap;
+use std::pin::pin;
+
 use anyhow::{Context as _, Result};
+use futures::StreamExt;
 use k8s_openapi::api::core::v1::Pod;
 use kube::api::Api;
-use tracing::{info, instrument};
+use kube::runtime::watcher::{self, Event};
+use tokio::sync::{mpsc, watch};
+use tracing::{debug, error, info, instrument};
 
 use super::create_client;
+use crate::event::AppEvent;
 
 #[derive(Debug, Clone)]
 pub struct PodInfo {
@@ -68,6 +75,91 @@ pub async fn list_pods(context: &str, namespace: &str) -> Result<Vec<PodInfo>> {
     info!(context, namespace, count = pods.len(), "loaded pods");
 
     Ok(pods)
+}
+
+/// Watch pods in the given namespace via the Kubernetes watch API.
+///
+/// Sends [`AppEvent::PodsUpdated`] whenever the pod list changes.
+/// Runs until `cancel_rx` fires or the stream ends.
+#[instrument(skip_all, fields(context, namespace))]
+pub async fn watch_pods(
+    context: &str,
+    namespace: &str,
+    tx: mpsc::UnboundedSender<AppEvent>,
+    mut cancel_rx: watch::Receiver<bool>,
+) {
+    let client = match create_client(Some(context)).await {
+        Ok(c) => c,
+        Err(e) => {
+            error!(error = %e, "failed to create client for pod watcher");
+            let _ = tx.send(AppEvent::Error(format!("Failed to watch pods: {e:#}")));
+            return;
+        }
+    };
+
+    let api: Api<Pod> = Api::namespaced(client, namespace);
+    let stream = pin!(watcher::watcher(api, watcher::Config::default()));
+    let mut pods: BTreeMap<String, PodInfo> = BTreeMap::new();
+    let mut initialized = false;
+
+    // Stream is fused by the watcher internally; we pin and iterate.
+    let mut stream = stream;
+
+    loop {
+        tokio::select! {
+            _ = cancel_rx.changed() => {
+                debug!("pod watcher cancelled");
+                break;
+            }
+            event = stream.next() => {
+                match event {
+                    Some(Ok(Event::Init)) => {
+                        pods.clear();
+                        initialized = false;
+                    }
+                    Some(Ok(Event::InitApply(pod))) => {
+                        let info = PodInfo::from_pod(&pod);
+                        pods.insert(info.name.clone(), info);
+                    }
+                    Some(Ok(Event::InitDone)) => {
+                        initialized = true;
+                        let list: Vec<PodInfo> = pods.values().cloned().collect();
+                        info!(count = list.len(), "pod watcher initial sync complete");
+                        let _ = tx.send(AppEvent::PodsUpdated(list));
+                    }
+                    Some(Ok(Event::Apply(pod))) => {
+                        let info = PodInfo::from_pod(&pod);
+                        pods.insert(info.name.clone(), info);
+                        if initialized {
+                            let list: Vec<PodInfo> = pods.values().cloned().collect();
+                            debug!(count = list.len(), "pod watcher: apply");
+                            let _ = tx.send(AppEvent::PodsUpdated(list));
+                        }
+                    }
+                    Some(Ok(Event::Delete(pod))) => {
+                        if let Some(name) = pod.metadata.name.as_ref() {
+                            pods.remove(name);
+                        }
+                        if initialized {
+                            let list: Vec<PodInfo> = pods.values().cloned().collect();
+                            debug!(count = list.len(), "pod watcher: delete");
+                            let _ = tx.send(AppEvent::PodsUpdated(list));
+                        }
+                    }
+                    Some(Err(e)) => {
+                        // kube-runtime watcher has built-in retry with backoff;
+                        // report the error but keep running.
+                        error!(error = %e, "pod watcher error");
+                        let _ = tx.send(AppEvent::Error(format!("Pod watch error: {e}")));
+                    }
+                    None => {
+                        debug!("pod watcher stream ended");
+                        break;
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

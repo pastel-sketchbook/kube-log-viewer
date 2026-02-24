@@ -146,6 +146,9 @@ pub struct App {
 
     // Log stream cancellation handle
     log_cancel_tx: Option<tokio::sync::watch::Sender<bool>>,
+
+    // Pod watcher cancellation handle
+    pod_watcher_cancel: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl App {
@@ -185,6 +188,7 @@ impl App {
             should_quit: false,
             tx,
             log_cancel_tx: None,
+            pod_watcher_cancel: None,
         }
     }
 
@@ -229,8 +233,9 @@ impl App {
             }
         }
 
-        // Clean up any running log stream
+        // Clean up any running background tasks
         app.cancel_log_stream();
+        app.cancel_pod_watcher();
         Ok(())
     }
 
@@ -469,7 +474,7 @@ impl App {
                     self.log_lines.clear();
                     self.containers.clear();
                     self.cancel_log_stream();
-                    self.load_pods();
+                    self.start_pod_watcher();
                 }
             }
             PopupKind::Contexts => {
@@ -485,7 +490,7 @@ impl App {
                     self.containers.clear();
                     self.cancel_log_stream();
                     self.load_namespaces();
-                    self.load_pods();
+                    self.start_pod_watcher();
                 }
             }
             PopupKind::Containers => {
@@ -522,7 +527,7 @@ impl App {
                 self.contexts = contexts;
                 self.current_context = current;
                 self.load_namespaces();
-                self.load_pods();
+                self.start_pod_watcher();
             }
             AppEvent::NamespacesLoaded(namespaces) => {
                 debug!(count = namespaces.len(), "namespaces loaded");
@@ -537,9 +542,23 @@ impl App {
             }
             AppEvent::PodsUpdated(pods) => {
                 debug!(count = pods.len(), "pods updated");
+
+                // Preserve selection by pod name across refreshes
+                let prev_name = self
+                    .pod_list_state
+                    .selected()
+                    .and_then(|i| self.pods.get(i))
+                    .map(|p| p.name.clone());
+
                 self.pods = pods;
-                if self.pod_list_state.selected().is_none() && !self.pods.is_empty() {
-                    self.pod_list_state.select(Some(0));
+
+                let new_index =
+                    prev_name.and_then(|name| self.pods.iter().position(|p| p.name == name));
+
+                match new_index {
+                    Some(i) => self.pod_list_state.select(Some(i)),
+                    None if !self.pods.is_empty() => self.pod_list_state.select(Some(0)),
+                    None => self.pod_list_state.select(None),
                 }
             }
             AppEvent::LogLine(line) => {
@@ -671,26 +690,31 @@ impl App {
         });
     }
 
-    fn load_pods(&self) {
+    fn start_pod_watcher(&mut self) {
+        self.cancel_pod_watcher();
+
         info!(
             context = %self.current_context,
             namespace = %self.current_namespace,
-            "spawning pod load task"
+            "starting pod watcher"
         );
         let tx = self.tx.clone();
         let context = self.current_context.clone();
         let namespace = self.current_namespace.clone();
+
+        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        self.pod_watcher_cancel = Some(cancel_tx);
+
         tokio::spawn(async move {
-            match k8s::pods::list_pods(&context, &namespace).await {
-                Ok(pods) => {
-                    let _ = tx.send(AppEvent::PodsUpdated(pods));
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to load pods");
-                    let _ = tx.send(AppEvent::Error(format!("Failed to load pods: {e:#}")));
-                }
-            }
+            k8s::pods::watch_pods(&context, &namespace, tx, cancel_rx).await;
         });
+    }
+
+    fn cancel_pod_watcher(&mut self) {
+        if let Some(cancel_tx) = self.pod_watcher_cancel.take() {
+            debug!("cancelling active pod watcher");
+            let _ = cancel_tx.send(true);
+        }
     }
 
     fn start_log_stream(&mut self, pod_name: &str, container: Option<&str>) {
@@ -1353,5 +1377,77 @@ mod tests {
         assert_eq!(filtered.len(), 2);
         assert!(filtered[0].contains("ERROR: something broke"));
         assert!(filtered[1].contains("no timestamp ERROR here"));
+    }
+
+    // -- Pod watcher / selection preservation --------------------------------
+
+    fn make_pod_info(name: &str) -> k8s::pods::PodInfo {
+        k8s::pods::PodInfo {
+            name: name.to_string(),
+            status: "Running".to_string(),
+            ready: "1/1".to_string(),
+            restarts: 0,
+            containers: vec!["main".to_string()],
+        }
+    }
+
+    #[test]
+    fn test_pods_updated_preserves_selection_by_name() {
+        let mut app = test_app();
+        // Initial pods: a, b, c — select "b" at index 1
+        app.handle_app_event(AppEvent::PodsUpdated(vec![
+            make_pod_info("pod-a"),
+            make_pod_info("pod-b"),
+            make_pod_info("pod-c"),
+        ]));
+        app.pod_list_state.select(Some(1)); // "pod-b"
+
+        // Refresh: order changes, "pod-b" is now at index 2
+        app.handle_app_event(AppEvent::PodsUpdated(vec![
+            make_pod_info("pod-a"),
+            make_pod_info("pod-c"),
+            make_pod_info("pod-b"),
+        ]));
+        assert_eq!(app.pod_list_state.selected(), Some(2)); // follows "pod-b"
+    }
+
+    #[test]
+    fn test_pods_updated_falls_back_when_selected_pod_removed() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::PodsUpdated(vec![
+            make_pod_info("pod-a"),
+            make_pod_info("pod-b"),
+        ]));
+        app.pod_list_state.select(Some(1)); // "pod-b"
+
+        // "pod-b" is gone
+        app.handle_app_event(AppEvent::PodsUpdated(vec![make_pod_info("pod-a")]));
+        assert_eq!(app.pod_list_state.selected(), Some(0)); // falls back to first
+    }
+
+    #[test]
+    fn test_pods_updated_clears_selection_when_empty() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::PodsUpdated(vec![make_pod_info("pod-a")]));
+        assert_eq!(app.pod_list_state.selected(), Some(0));
+
+        // All pods removed
+        app.handle_app_event(AppEvent::PodsUpdated(vec![]));
+        assert_eq!(app.pod_list_state.selected(), None);
+    }
+
+    #[test]
+    fn test_pods_updated_new_pod_appears() {
+        let mut app = test_app();
+        app.handle_app_event(AppEvent::PodsUpdated(vec![make_pod_info("pod-a")]));
+        app.pod_list_state.select(Some(0)); // "pod-a"
+
+        // New pod added, "pod-a" stays at index 0
+        app.handle_app_event(AppEvent::PodsUpdated(vec![
+            make_pod_info("pod-a"),
+            make_pod_info("pod-b"),
+        ]));
+        assert_eq!(app.pod_list_state.selected(), Some(0)); // still "pod-a"
+        assert_eq!(app.pods.len(), 2);
     }
 }

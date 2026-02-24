@@ -68,6 +68,9 @@ kube-log-viewer/
 └── .editorconfig                           # Editor settings
 ```
 
+**Local reference files (gitignored):**
+- `.skills/` — API reference and cheatsheets for dependencies (e.g., `kube.md`). Read these before looking up crate APIs in cargo registry source.
+
 **Data flow:**
 1. `main.rs` sets up the terminal and launches the async event loop
 2. `App::run()` uses `tokio::select!` to multiplex terminal events, K8s channel events, and ticks

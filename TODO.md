@@ -74,7 +74,7 @@ Implementation roadmap organized in phases. Each phase builds on the previous.
 - [x] CI/CD: Multi-arch release workflow (4 targets, GitHub Release)
 - [ ] README: add screenshot / demo GIF
 - [ ] Regex search mode (toggle between substring and regex)
-- [ ] Pod auto-refresh via `kube::runtime::watcher`
+- [x] Pod auto-refresh via `kube::runtime::watcher`
 - [ ] Log export to file
 - [ ] Config file for themes / keybindings
 - [x] Timestamp display modes: UTC / Local / Relative (`T` cycle)
