@@ -84,6 +84,7 @@ kube-log-viewer/
 - **Terminal Safety**: Always restore terminal state on exit, including on panic. Use a panic hook or `catch_unwind` wrapper.
 - **Testing**: Unit tests for state transitions, pod info extraction, log filtering. Integration tests for event handling.
 - **Pre-commit Gate**: Always run `task check:all && task install` before committing. Only commit if both pass.
+- **No Pushing Without Permission**: Never `git push` or `git push --tags` unless the user explicitly asks. Tags trigger CI releases, so avoid unnecessary pushes.
 
 # COMMIT CONVENTIONS
 
