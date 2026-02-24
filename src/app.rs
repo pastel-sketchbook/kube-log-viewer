@@ -6,7 +6,7 @@ use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info};
 
 use crate::event::AppEvent;
@@ -224,6 +224,8 @@ pub struct App {
 
     // Auth state
     pub az_login_in_progress: bool,
+    /// Cancellation sender for the `az login` background task.
+    az_login_cancel: Option<watch::Sender<bool>>,
 
     // Control
     pub should_quit: bool,
@@ -272,6 +274,7 @@ impl App {
             theme_index: 0,
 
             az_login_in_progress: false,
+            az_login_cancel: None,
 
             should_quit: false,
             tx,
@@ -323,6 +326,7 @@ impl App {
         // Clean up any running background tasks
         app.cancel_all_streams();
         app.cancel_pod_watcher();
+        app.cancel_az_login();
         Ok(())
     }
 
@@ -458,62 +462,61 @@ impl App {
     // -- Navigation ---------------------------------------------------------
 
     fn navigate_up(&mut self) {
-        match self.focus {
-            Focus::Pods => {
+        match (self.focus, self.stream_mode) {
+            (Focus::Pods, _) => {
                 let i = self.pod_list_state.selected().unwrap_or(0);
                 if i > 0 {
                     self.pod_list_state.select(Some(i - 1));
                 }
             }
-            Focus::Logs => {
-                if self.stream_mode == StreamMode::Split {
-                    if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                        handle.follow_mode = false;
-                        handle.scroll_offset = handle.scroll_offset.saturating_sub(1);
-                    }
-                } else {
-                    self.follow_mode = false;
-                    self.log_scroll_offset = self.log_scroll_offset.saturating_sub(1);
+            (Focus::Logs, StreamMode::Split) => {
+                if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                    handle.follow_mode = false;
+                    handle.scroll_offset = handle.scroll_offset.saturating_sub(1);
                 }
+            }
+            (Focus::Logs, _) => {
+                self.follow_mode = false;
+                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(1);
             }
         }
     }
 
     fn navigate_down(&mut self) {
-        match self.focus {
-            Focus::Pods => {
+        match (self.focus, self.stream_mode) {
+            (Focus::Pods, _) => {
                 let len = self.pods.len();
                 let i = self.pod_list_state.selected().unwrap_or(0);
                 if len > 0 && i + 1 < len {
                     self.pod_list_state.select(Some(i + 1));
                 }
             }
-            Focus::Logs => {
-                if self.stream_mode == StreamMode::Split {
-                    let max = self
-                        .filtered_log_lines_for_pane(self.active_pane)
-                        .len()
-                        .saturating_sub(1);
-                    if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                        handle.follow_mode = false;
-                        if handle.scroll_offset < max {
-                            handle.scroll_offset += 1;
-                        }
+            (Focus::Logs, StreamMode::Split) => {
+                let max = self
+                    .filtered_log_lines_for_pane(self.active_pane)
+                    .len()
+                    .saturating_sub(1);
+                if let Some(handle) = self.streams.get_mut(self.active_pane) {
+                    handle.follow_mode = false;
+                    if handle.scroll_offset < max {
+                        handle.scroll_offset += 1;
                     }
-                } else {
-                    self.follow_mode = false;
-                    let max = self.filtered_log_lines().len().saturating_sub(1);
-                    if self.log_scroll_offset < max {
-                        self.log_scroll_offset += 1;
-                    }
+                }
+            }
+            (Focus::Logs, _) => {
+                self.follow_mode = false;
+                let max = self.filtered_log_lines().len().saturating_sub(1);
+                if self.log_scroll_offset < max {
+                    self.log_scroll_offset += 1;
                 }
             }
         }
     }
 
     fn scroll_to_bottom(&mut self) {
-        if self.focus == Focus::Logs {
-            if self.stream_mode == StreamMode::Split {
+        match (self.focus, self.stream_mode) {
+            (Focus::Pods, _) => {}
+            (Focus::Logs, StreamMode::Split) => {
                 let max = self
                     .filtered_log_lines_for_pane(self.active_pane)
                     .len()
@@ -522,7 +525,8 @@ impl App {
                     handle.follow_mode = true;
                     handle.scroll_offset = max;
                 }
-            } else {
+            }
+            (Focus::Logs, _) => {
                 self.follow_mode = true;
                 self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
             }
@@ -530,13 +534,15 @@ impl App {
     }
 
     fn scroll_to_top(&mut self) {
-        if self.focus == Focus::Logs {
-            if self.stream_mode == StreamMode::Split {
+        match (self.focus, self.stream_mode) {
+            (Focus::Pods, _) => {}
+            (Focus::Logs, StreamMode::Split) => {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
                     handle.follow_mode = false;
                     handle.scroll_offset = 0;
                 }
-            } else {
+            }
+            (Focus::Logs, _) => {
                 self.follow_mode = false;
                 self.log_scroll_offset = 0;
             }
@@ -544,13 +550,15 @@ impl App {
     }
 
     fn page_up(&mut self) {
-        if self.focus == Focus::Logs {
-            if self.stream_mode == StreamMode::Split {
+        match (self.focus, self.stream_mode) {
+            (Focus::Pods, _) => {}
+            (Focus::Logs, StreamMode::Split) => {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
                     handle.follow_mode = false;
                     handle.scroll_offset = handle.scroll_offset.saturating_sub(20);
                 }
-            } else {
+            }
+            (Focus::Logs, _) => {
                 self.follow_mode = false;
                 self.log_scroll_offset = self.log_scroll_offset.saturating_sub(20);
             }
@@ -558,8 +566,9 @@ impl App {
     }
 
     fn page_down(&mut self) {
-        if self.focus == Focus::Logs {
-            if self.stream_mode == StreamMode::Split {
+        match (self.focus, self.stream_mode) {
+            (Focus::Pods, _) => {}
+            (Focus::Logs, StreamMode::Split) => {
                 let max = self
                     .filtered_log_lines_for_pane(self.active_pane)
                     .len()
@@ -567,7 +576,8 @@ impl App {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
                     handle.scroll_offset = (handle.scroll_offset + 20).min(max);
                 }
-            } else {
+            }
+            (Focus::Logs, _) => {
                 let max = self.filtered_log_lines().len().saturating_sub(1);
                 self.log_scroll_offset = (self.log_scroll_offset + 20).min(max);
             }
@@ -723,15 +733,24 @@ impl App {
                 self.load_namespaces();
                 self.start_pod_watcher();
             }
-            AppEvent::NamespacesLoaded(namespaces) => {
-                debug!(count = namespaces.len(), "namespaces loaded");
-                self.namespaces = namespaces;
-                if !self.namespaces.contains(&self.current_namespace) {
-                    self.current_namespace = self
-                        .namespaces
-                        .first()
-                        .cloned()
-                        .unwrap_or_else(|| "default".to_string());
+            AppEvent::NamespacesLoaded(context, namespaces) => {
+                // Discard stale results from a previously-active context
+                if context != self.current_context {
+                    debug!(
+                        stale_context = %context,
+                        current_context = %self.current_context,
+                        "discarding stale namespace list"
+                    );
+                } else {
+                    debug!(count = namespaces.len(), "namespaces loaded");
+                    self.namespaces = namespaces;
+                    if !self.namespaces.contains(&self.current_namespace) {
+                        self.current_namespace = self
+                            .namespaces
+                            .first()
+                            .cloned()
+                            .unwrap_or_else(|| "default".to_string());
+                    }
                 }
             }
             AppEvent::PodsUpdated(pods) => {
@@ -877,11 +896,14 @@ impl App {
         info!("spawning context load task");
         let tx = self.tx.clone();
         tokio::spawn(async move {
-            match k8s::contexts::load_contexts() {
-                Ok((contexts, current)) => {
+            let result = tokio::task::spawn_blocking(k8s::contexts::load_contexts)
+                .await
+                .context("context load task panicked");
+            match result {
+                Ok(Ok((contexts, current))) => {
                     let _ = tx.send(AppEvent::ContextsLoaded(contexts, current));
                 }
-                Err(e) => {
+                Ok(Err(e)) | Err(e) => {
                     error!(error = %e, "failed to load contexts");
                     let _ = tx.send(AppEvent::Error(format!("Failed to load contexts: {e:#}")));
                 }
@@ -896,7 +918,7 @@ impl App {
         tokio::spawn(async move {
             match k8s::namespaces::list_namespaces(&context).await {
                 Ok(namespaces) => {
-                    let _ = tx.send(AppEvent::NamespacesLoaded(namespaces));
+                    let _ = tx.send(AppEvent::NamespacesLoaded(context, namespaces));
                 }
                 Err(e) => {
                     error!(error = %e, "failed to load namespaces");
@@ -1135,12 +1157,20 @@ impl App {
 
     /// Spawn `az login` in the background and send [`AppEvent::AzLoginCompleted`]
     /// when it finishes. Opens the default browser for interactive auth.
+    ///
+    /// If a previous `az login` is still running, it is killed first.
     fn spawn_az_login(&mut self) {
+        // Kill any previous az login process
+        self.cancel_az_login();
+
         self.az_login_in_progress = true;
         self.log_lines.push(TaggedLine::system(
             "[INFO] Azure credentials expired — opening browser for login…".to_string(),
         ));
         info!("spawning az login");
+
+        let (cancel_tx, mut cancel_rx) = watch::channel(false);
+        self.az_login_cancel = Some(cancel_tx);
 
         let tx = self.tx.clone();
         tokio::spawn(async move {
@@ -1151,7 +1181,7 @@ impl App {
                 .stderr(std::process::Stdio::piped())
                 .spawn();
 
-            let child = match result {
+            let mut child = match result {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = tx.send(AppEvent::AzLoginCompleted(Err(format!(
@@ -1161,20 +1191,38 @@ impl App {
                 }
             };
 
-            match child.wait_with_output().await {
-                Ok(output) if output.status.success() => {
-                    let _ = tx.send(AppEvent::AzLoginCompleted(Ok(())));
+            tokio::select! {
+                wait_result = child.wait() => {
+                    match wait_result {
+                        Ok(status) if status.success() => {
+                            let _ = tx.send(AppEvent::AzLoginCompleted(Ok(())));
+                        }
+                        Ok(status) => {
+                            let msg = format!("az login exited with {status}");
+                            let _ = tx.send(AppEvent::AzLoginCompleted(Err(msg)));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(AppEvent::AzLoginCompleted(Err(format!("wait failed: {e}"))));
+                        }
+                    }
                 }
-                Ok(output) => {
-                    let stderr = String::from_utf8_lossy(&output.stderr);
-                    let msg = stderr.lines().last().unwrap_or("unknown error");
-                    let _ = tx.send(AppEvent::AzLoginCompleted(Err(msg.to_string())));
-                }
-                Err(e) => {
-                    let _ = tx.send(AppEvent::AzLoginCompleted(Err(format!("wait failed: {e}"))));
+                _ = cancel_rx.changed() => {
+                    // Kill the child process when cancellation is requested.
+                    // child.kill() is infallible if the process has already exited.
+                    let _ = child.kill().await;
+                    debug!("az login child process killed via cancellation");
                 }
             }
         });
+    }
+
+    /// Cancel any in-progress `az login` background task, killing the child
+    /// process if it is still running.
+    fn cancel_az_login(&mut self) {
+        if let Some(cancel_tx) = self.az_login_cancel.take() {
+            let _ = cancel_tx.send(true);
+        }
+        self.az_login_in_progress = false;
     }
 }
 
@@ -1226,14 +1274,19 @@ async fn write_plain_text(
     file.write_all(meta.as_comment_lines().as_bytes())
         .await
         .context("failed to write header")?;
-    file.write_all(b"#\n").await?;
+    file.write_all(b"#\n")
+        .await
+        .context("failed to write header separator")?;
 
     for (source, line) in lines {
         if stream_mode == StreamMode::Merged && !source.is_empty() {
             file.write_all(format!("[{source}] {line}\n").as_bytes())
-                .await?;
+                .await
+                .context("failed to write log line")?;
         } else {
-            file.write_all(format!("{line}\n").as_bytes()).await?;
+            file.write_all(format!("{line}\n").as_bytes())
+                .await
+                .context("failed to write log line")?;
         }
     }
 
@@ -1329,12 +1382,15 @@ async fn write_csv(
     file.write_all(meta.as_comment_lines().as_bytes())
         .await
         .context("failed to write CSV header")?;
-    file.write_all(b"#\n").await?;
+    file.write_all(b"#\n")
+        .await
+        .context("failed to write CSV header separator")?;
 
     // Column header row
     let header: Vec<String> = columns.iter().map(|c| csv_escape(c)).collect();
     file.write_all(format!("{}\n", header.join(",")).as_bytes())
-        .await?;
+        .await
+        .context("failed to write CSV column header")?;
 
     // Data rows
     for (i, (source, raw)) in lines.iter().enumerate() {
@@ -1364,7 +1420,8 @@ async fn write_csv(
             })
             .collect();
         file.write_all(format!("{}\n", row.join(",")).as_bytes())
-            .await?;
+            .await
+            .context("failed to write CSV data row")?;
     }
 
     file.flush().await.context("failed to flush CSV file")?;
@@ -1782,10 +1839,10 @@ mod tests {
     fn test_namespaces_loaded_preserves_current_if_present() {
         let mut app = test_app();
         app.current_namespace = "kube-system".to_string();
-        app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-            "default".to_string(),
-            "kube-system".to_string(),
-        ]));
+        app.handle_app_event(AppEvent::NamespacesLoaded(
+            String::new(),
+            vec!["default".to_string(), "kube-system".to_string()],
+        ));
         assert_eq!(app.current_namespace, "kube-system");
     }
 
@@ -1793,10 +1850,10 @@ mod tests {
     fn test_namespaces_loaded_falls_back_to_first() {
         let mut app = test_app();
         app.current_namespace = "nonexistent".to_string();
-        app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-            "default".to_string(),
-            "production".to_string(),
-        ]));
+        app.handle_app_event(AppEvent::NamespacesLoaded(
+            String::new(),
+            vec!["default".to_string(), "production".to_string()],
+        ));
         assert_eq!(app.current_namespace, "default");
     }
 

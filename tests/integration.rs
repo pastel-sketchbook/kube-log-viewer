@@ -59,12 +59,15 @@ async fn test_full_startup_flow() {
     assert_eq!(app.current_context, "aks-dev-westeu");
 
     // 2. Simulate K8s returning namespaces
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-        "default".to_string(),
-        "ingress-nginx".to_string(),
-        "kube-system".to_string(),
-        "monitoring".to_string(),
-    ]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        "aks-dev-westeu".to_string(),
+        vec![
+            "default".to_string(),
+            "ingress-nginx".to_string(),
+            "kube-system".to_string(),
+            "monitoring".to_string(),
+        ],
+    ));
 
     assert_eq!(app.namespaces.len(), 4);
     assert_eq!(app.current_namespace, "default");
@@ -100,10 +103,10 @@ async fn test_context_switch_resets_state() {
         vec!["ctx-a".to_string(), "ctx-b".to_string()],
         "ctx-a".to_string(),
     ));
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-        "default".to_string(),
-        "prod".to_string(),
-    ]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        "ctx-a".to_string(),
+        vec!["default".to_string(), "prod".to_string()],
+    ));
     app.handle_app_event(AppEvent::PodsUpdated(vec![mock_pod(
         "web-1",
         "Running",
@@ -159,10 +162,10 @@ async fn test_namespace_switch_resets_pods_and_logs() {
         vec!["my-ctx".to_string()],
         "my-ctx".to_string(),
     ));
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-        "default".to_string(),
-        "staging".to_string(),
-    ]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        "my-ctx".to_string(),
+        vec!["default".to_string(), "staging".to_string()],
+    ));
     app.handle_app_event(AppEvent::PodsUpdated(vec![mock_pod(
         "api-pod",
         "Running",
@@ -214,7 +217,10 @@ async fn test_container_switch_clears_logs() {
         vec!["ctx".to_string()],
         "ctx".to_string(),
     ));
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        "ctx".to_string(),
+        vec!["default".to_string()],
+    ));
     app.handle_app_event(AppEvent::PodsUpdated(vec![mock_pod(
         "multi-pod",
         "Running",
@@ -271,7 +277,10 @@ fn test_error_then_recovery() {
     assert!(app.log_lines[0].line.contains("kubeconfig"));
 
     // Simulate recovery -- namespaces load successfully
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        String::new(),
+        vec!["default".to_string()],
+    ));
     assert_eq!(app.namespaces, vec!["default"]);
 }
 
@@ -384,10 +393,10 @@ fn test_namespace_fallback_after_context_switch() {
     app.current_namespace = "my-custom-ns".to_string();
 
     // New context has different namespaces -- current_namespace not present
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-        "default".to_string(),
-        "kube-system".to_string(),
-    ]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        String::new(),
+        vec!["default".to_string(), "kube-system".to_string()],
+    ));
 
     // Falls back to first namespace
     assert_eq!(app.current_namespace, "default");
@@ -399,11 +408,14 @@ fn test_namespace_preserved_when_still_present() {
 
     app.current_namespace = "monitoring".to_string();
 
-    app.handle_app_event(AppEvent::NamespacesLoaded(vec![
-        "default".to_string(),
-        "monitoring".to_string(),
-        "kube-system".to_string(),
-    ]));
+    app.handle_app_event(AppEvent::NamespacesLoaded(
+        String::new(),
+        vec![
+            "default".to_string(),
+            "monitoring".to_string(),
+            "kube-system".to_string(),
+        ],
+    ));
 
     // Preserved because "monitoring" is in the list
     assert_eq!(app.current_namespace, "monitoring");

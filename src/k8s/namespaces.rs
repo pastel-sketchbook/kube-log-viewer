@@ -8,7 +8,9 @@ use super::create_client;
 /// List all namespace names in the cluster for the given context.
 #[instrument(skip_all, fields(context))]
 pub async fn list_namespaces(context: &str) -> Result<Vec<String>> {
-    let client = create_client(Some(context)).await?;
+    let client = create_client(Some(context))
+        .await
+        .with_context(|| format!("failed to create client for context '{context}'"))?;
     let ns_api: Api<Namespace> = Api::all(client);
     let ns_list = ns_api
         .list(&Default::default())

@@ -4,8 +4,9 @@ use crate::k8s::pods::PodInfo;
 pub enum AppEvent {
     /// Pod list fetched from K8s
     PodsUpdated(Vec<PodInfo>),
-    /// Namespace list fetched from K8s
-    NamespacesLoaded(Vec<String>),
+    /// Namespace list fetched from K8s.
+    /// Fields: (context the namespaces belong to, namespace names).
+    NamespacesLoaded(String, Vec<String>),
     /// Context list + current context loaded from kubeconfig
     ContextsLoaded(Vec<String>, String),
     /// A single log line received from a pod's log stream.

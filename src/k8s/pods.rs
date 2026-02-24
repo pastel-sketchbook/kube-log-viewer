@@ -63,12 +63,13 @@ impl PodInfo {
 /// List pods in the given namespace and context, returning structured info.
 #[instrument(skip_all, fields(context, namespace))]
 pub async fn list_pods(context: &str, namespace: &str) -> Result<Vec<PodInfo>> {
-    let client = create_client(Some(context)).await?;
-    let pod_api: Api<Pod> = Api::namespaced(client, namespace);
-    let pod_list = pod_api
-        .list(&Default::default())
+    let client = create_client(Some(context))
         .await
-        .with_context(|| format!("failed to list pods in namespace '{namespace}'"))?;
+        .with_context(|| format!("failed to create client for context '{context}'"))?;
+    let pod_api: Api<Pod> = Api::namespaced(client, namespace);
+    let pod_list = pod_api.list(&Default::default()).await.with_context(|| {
+        format!("failed to list pods in namespace '{namespace}' (context '{context}')")
+    })?;
 
     let pods: Vec<PodInfo> = pod_list.items.iter().map(PodInfo::from_pod).collect();
 
@@ -107,9 +108,11 @@ pub async fn watch_pods(
 
     loop {
         tokio::select! {
-            _ = cancel_rx.changed() => {
-                debug!("pod watcher cancelled");
-                break;
+            result = cancel_rx.changed() => {
+                if result.is_err() || *cancel_rx.borrow() {
+                    debug!("pod watcher cancelled");
+                    break;
+                }
             }
             event = stream.next() => {
                 match event {

@@ -59,7 +59,11 @@ async fn main() -> Result<()> {
     let original_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(
+            std::io::stdout(),
+            LeaveAlternateScreen,
+            crossterm::cursor::Show
+        );
         original_hook(panic_info);
     }));
 

@@ -24,7 +24,9 @@ pub async fn stream_logs(
 ) -> Result<()> {
     info!("starting log stream");
 
-    let client = create_client(Some(context)).await?;
+    let client = create_client(Some(context))
+        .await
+        .with_context(|| format!("failed to create client for context '{context}'"))?;
     let pod_api: Api<Pod> = Api::namespaced(client, namespace);
 
     let params = LogParams {
@@ -38,7 +40,11 @@ pub async fn stream_logs(
     let stream = pod_api
         .log_stream(pod_name, &params)
         .await
-        .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
+        .with_context(|| {
+            format!(
+                "failed to start log stream for pod '{pod_name}' in namespace '{namespace}' (context '{context}')"
+            )
+        })?;
 
     let mut lines = stream.lines();
     let mut line_count: u64 = 0;
@@ -64,8 +70,8 @@ pub async fn stream_logs(
                     }
                 }
             }
-            _ = cancel_rx.changed() => {
-                if *cancel_rx.borrow() {
+            result = cancel_rx.changed() => {
+                if result.is_err() || *cancel_rx.borrow() {
                     info!(line_count, "log stream cancelled");
                     break;
                 }
