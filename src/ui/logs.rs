@@ -118,6 +118,20 @@ fn format_json_line(line: &str) -> Cow<'_, str> {
     Cow::Owned(parts.join(" "))
 }
 
+/// Strip K8s-prepended timestamp when the remainder has its own timestamp.
+/// This prevents showing two timestamps (K8s + application) on the same line.
+/// Lines are kept as-is when the remainder does not start with a recognisable
+/// timestamp (e.g. plain text or JSON with `{`).
+fn strip_duplicate_timestamp(line: &str) -> &str {
+    if let Some(m) = TIMESTAMP_RE.find(line) {
+        let rest = &line[m.end()..];
+        if TIMESTAMP_RE.is_match(rest) {
+            return rest;
+        }
+    }
+    line
+}
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let title = match (&app.selected_pod, &app.selected_container) {
         (Some(pod), Some(container)) => format!(" Logs: {} / {} ", pod, container),
@@ -157,10 +171,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .skip(scroll_offset)
         .take(inner_height)
         .map(|line| {
+            let line = strip_duplicate_timestamp(line);
             if app.json_mode {
                 format_json_line(line)
             } else {
-                Cow::Borrowed(*line)
+                Cow::Borrowed(line)
             }
         })
         .collect();
@@ -813,5 +828,55 @@ mod tests {
         let spans = colorize_log_line("2026-02-24T16:36:51Z ERROR fail", &DARK, TimestampMode::Utc);
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2026-02-24T16:36:51Z ");
+    }
+
+    // -- strip_duplicate_timestamp -------------------------------------------
+
+    #[test]
+    fn test_strip_dup_ts_removes_k8s_prefix_when_app_has_own_timestamp() {
+        // K8s prefix + application timestamp → strip K8s prefix
+        let line = "2026-02-24T16:36:51.600000000Z 2026-02-24T16:36:51.600Z [ERROR] fail";
+        let result = strip_duplicate_timestamp(line);
+        assert_eq!(result, "2026-02-24T16:36:51.600Z [ERROR] fail");
+    }
+
+    #[test]
+    fn test_strip_dup_ts_keeps_line_when_no_app_timestamp() {
+        // K8s prefix + plain text (no second timestamp) → keep as-is
+        let line = "2026-02-24T16:36:51.600000000Z plain text log message";
+        let result = strip_duplicate_timestamp(line);
+        assert_eq!(result, line);
+    }
+
+    #[test]
+    fn test_strip_dup_ts_keeps_line_when_json_remainder() {
+        // K8s prefix + JSON object → keep as-is (JSON flattening handles it)
+        let line = r#"2026-02-24T16:36:51.600Z {"time":"2026-02-24T16:36:51.600Z","msg":"hello"}"#;
+        let result = strip_duplicate_timestamp(line);
+        assert_eq!(result, line);
+    }
+
+    #[test]
+    fn test_strip_dup_ts_keeps_line_when_no_timestamp_at_all() {
+        // No timestamp at start → keep as-is
+        let line = "[ERROR] connection refused";
+        let result = strip_duplicate_timestamp(line);
+        assert_eq!(result, line);
+    }
+
+    #[test]
+    fn test_strip_dup_ts_with_space_separated_timestamps() {
+        // K8s prefix (RFC 3339) + space-separated app timestamp
+        let line = "2026-02-24T16:36:51Z 2026-02-24 16:36:51 INFO started";
+        let result = strip_duplicate_timestamp(line);
+        assert_eq!(result, "2026-02-24 16:36:51 INFO started");
+    }
+
+    #[test]
+    fn test_strip_dup_ts_single_timestamp_preserved() {
+        // Only one timestamp, no duplicate → keep as-is
+        let line = "2026-02-24T16:36:51Z ERROR something broke";
+        let result = strip_duplicate_timestamp(line);
+        assert_eq!(result, line);
     }
 }
