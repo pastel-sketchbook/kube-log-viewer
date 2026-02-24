@@ -57,7 +57,6 @@ async fn test_full_startup_flow() {
 
     assert_eq!(app.contexts.len(), 2);
     assert_eq!(app.current_context, "aks-dev-westeu");
-    assert!(app.error_message.is_none());
 
     // 2. Simulate K8s returning namespaces
     app.handle_app_event(AppEvent::NamespacesLoaded(vec![
@@ -86,7 +85,6 @@ async fn test_full_startup_flow() {
     assert_eq!(app.pods.len(), 3);
     // First pod auto-selected
     assert_eq!(app.pod_list_state.selected(), Some(0));
-    assert!(app.error_message.is_none());
 }
 
 // ---------------------------------------------------------------------------
@@ -256,30 +254,26 @@ fn test_error_then_recovery() {
         "Failed to load namespaces: failed to load kubeconfig for context 'bad-ctx'".to_string(),
     ));
 
-    assert!(app.error_message.is_some());
-    assert!(
-        app.error_message
-            .as_ref()
-            .is_some_and(|m| m.contains("kubeconfig"))
-    );
-    // Error also appended to log lines
+    // Error appended to log lines as [ERROR] prefix
     assert_eq!(app.log_lines.len(), 1);
     assert!(app.log_lines[0].starts_with("[ERROR]"));
+    assert!(app.log_lines[0].contains("kubeconfig"));
 
     // Simulate recovery -- namespaces load successfully
     app.handle_app_event(AppEvent::NamespacesLoaded(vec!["default".to_string()]));
-    assert!(app.error_message.is_none());
+    assert_eq!(app.namespaces, vec!["default"]);
 }
 
 #[test]
-fn test_multiple_errors_last_wins() {
+fn test_multiple_errors_accumulate_in_log_lines() {
     let (mut app, _rx) = test_app();
 
     app.handle_app_event(AppEvent::Error("error 1".to_string()));
     app.handle_app_event(AppEvent::Error("error 2".to_string()));
 
-    assert_eq!(app.error_message, Some("error 2".to_string()));
     assert_eq!(app.log_lines.len(), 2);
+    assert_eq!(app.log_lines[0], "[ERROR] error 1");
+    assert_eq!(app.log_lines[1], "[ERROR] error 2");
 }
 
 // ---------------------------------------------------------------------------

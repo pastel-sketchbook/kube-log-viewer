@@ -12,6 +12,8 @@ pub enum AppEvent {
     LogLine(String),
     /// The log stream has ended (pod terminated, stream closed, etc.)
     LogStreamEnded,
+    /// `az login` completed (success or failure message)
+    AzLoginCompleted(Result<(), String>),
     /// An error from a background K8s operation
     Error(String),
 }

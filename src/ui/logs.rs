@@ -1,6 +1,5 @@
-use ratatui::layout::{Constraint, Direction, Layout};
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use crate::app::{App, Focus, InputMode};
 
@@ -65,11 +64,6 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     if app.input_mode == InputMode::Search {
         render_search_input(frame, app, area);
     }
-
-    // Render error overlay within the log pane
-    if let Some(ref msg) = app.error_message {
-        render_error_overlay(frame, msg, area);
-    }
 }
 
 fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
@@ -84,63 +78,6 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().fg(Color::Yellow).bg(Color::DarkGray));
 
     frame.render_widget(input, input_area);
-}
-
-/// Render a centered error overlay *within* the given area (the log pane).
-fn render_error_overlay(frame: &mut Frame, message: &str, area: Rect) {
-    // Size the overlay to fit the message, capped to 80% of the pane
-    let max_width = (area.width as f32 * 0.8) as u16;
-    // +4 for border + padding on each side
-    let content_width = (message.len() as u16 + 4).min(max_width).max(30);
-    // Wrap long messages: estimate lines needed
-    let inner_width = content_width.saturating_sub(4) as usize;
-    let wrapped_lines = if inner_width > 0 {
-        (message.len() / inner_width) + 1
-    } else {
-        1
-    };
-    // +4 for border + title line + bottom padding
-    let content_height = (wrapped_lines as u16 + 4).min(area.height.saturating_sub(2));
-
-    let overlay = centered_rect_absolute(content_width, content_height, area);
-    frame.render_widget(Clear, overlay);
-
-    let error_block = Block::default()
-        .title(" Error ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Red));
-
-    let error_paragraph = Paragraph::new(message)
-        .block(error_block)
-        .style(Style::default().fg(Color::Red))
-        .wrap(Wrap { trim: false })
-        .alignment(Alignment::Center);
-
-    frame.render_widget(error_paragraph, overlay);
-}
-
-/// Create a centered [`Rect`] with absolute width/height within `container`.
-fn centered_rect_absolute(width: u16, height: u16, container: Rect) -> Rect {
-    let clamped_w = width.min(container.width);
-    let clamped_h = height.min(container.height);
-
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length((container.height.saturating_sub(clamped_h)) / 2),
-            Constraint::Length(clamped_h),
-            Constraint::Min(0),
-        ])
-        .split(container);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length((container.width.saturating_sub(clamped_w)) / 2),
-            Constraint::Length(clamped_w),
-            Constraint::Min(0),
-        ])
-        .split(vertical[1])[1]
 }
 
 fn colorize_log_line(line: &str) -> Vec<Span<'_>> {

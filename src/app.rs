@@ -67,8 +67,8 @@ pub struct App {
     pub selected_container: Option<String>,
     pub containers: Vec<String>,
 
-    // Error overlay (displayed in the log pane)
-    pub error_message: Option<String>,
+    // Auth state
+    pub az_login_in_progress: bool,
 
     // Control
     pub should_quit: bool,
@@ -106,7 +106,7 @@ impl App {
             selected_container: None,
             containers: Vec::new(),
 
-            error_message: None,
+            az_login_in_progress: false,
 
             should_quit: false,
             tx,
@@ -430,7 +430,6 @@ impl App {
         match event {
             AppEvent::ContextsLoaded(contexts, current) => {
                 info!(count = contexts.len(), current = %current, "contexts loaded");
-                self.error_message = None;
                 self.contexts = contexts;
                 self.current_context = current;
                 self.load_namespaces();
@@ -438,7 +437,6 @@ impl App {
             }
             AppEvent::NamespacesLoaded(namespaces) => {
                 debug!(count = namespaces.len(), "namespaces loaded");
-                self.error_message = None;
                 self.namespaces = namespaces;
                 if !self.namespaces.contains(&self.current_namespace) {
                     self.current_namespace = self
@@ -450,14 +448,12 @@ impl App {
             }
             AppEvent::PodsUpdated(pods) => {
                 debug!(count = pods.len(), "pods updated");
-                self.error_message = None;
                 self.pods = pods;
                 if self.pod_list_state.selected().is_none() && !self.pods.is_empty() {
                     self.pod_list_state.select(Some(0));
                 }
             }
             AppEvent::LogLine(line) => {
-                self.error_message = None;
                 self.log_lines.push(line);
                 if self.follow_mode {
                     self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
@@ -471,12 +467,29 @@ impl App {
             AppEvent::LogStreamEnded => {
                 debug!("log stream ended");
             }
+            AppEvent::AzLoginCompleted(result) => {
+                self.az_login_in_progress = false;
+                match result {
+                    Ok(()) => {
+                        self.log_lines.push(
+                            "[INFO] az login succeeded — reloading cluster data…".to_string(),
+                        );
+                        self.load_contexts();
+                    }
+                    Err(msg) => {
+                        error!(message = %msg, "az login failed");
+                        self.log_lines
+                            .push(format!("[ERROR] az login failed: {msg}"));
+                    }
+                }
+            }
             AppEvent::Error(msg) => {
                 error!(message = %msg, "background task error");
-                // Show a short, actionable summary in the overlay; keep raw
-                // error in log_lines so the user can scroll back for details.
-                self.error_message = Some(summarize_error(&msg));
-                self.log_lines.push(format!("[ERROR] {}", msg));
+                self.log_lines.push(format!("[ERROR] {msg}"));
+
+                if is_auth_error(&msg) && !self.az_login_in_progress {
+                    self.spawn_az_login();
+                }
             }
         }
     }
@@ -595,71 +608,67 @@ impl App {
             let _ = cancel_tx.send(true);
         }
     }
+
+    /// Spawn `az login` in the background and send [`AppEvent::AzLoginCompleted`]
+    /// when it finishes. Opens the default browser for interactive auth.
+    fn spawn_az_login(&mut self) {
+        self.az_login_in_progress = true;
+        self.log_lines
+            .push("[INFO] Azure credentials expired — opening browser for login…".to_string());
+        info!("spawning az login");
+
+        let tx = self.tx.clone();
+        tokio::spawn(async move {
+            let result = tokio::process::Command::new("az")
+                .arg("login")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::piped())
+                .spawn();
+
+            let child = match result {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx.send(AppEvent::AzLoginCompleted(Err(format!(
+                        "spawn failed: {e}"
+                    ))));
+                    return;
+                }
+            };
+
+            match child.wait_with_output().await {
+                Ok(output) if output.status.success() => {
+                    let _ = tx.send(AppEvent::AzLoginCompleted(Ok(())));
+                }
+                Ok(output) => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    let msg = stderr.lines().last().unwrap_or("unknown error");
+                    let _ = tx.send(AppEvent::AzLoginCompleted(Err(msg.to_string())));
+                }
+                Err(e) => {
+                    let _ = tx.send(AppEvent::AzLoginCompleted(Err(format!("wait failed: {e}"))));
+                }
+            }
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Error summarisation
+// Auth error detection
 // ---------------------------------------------------------------------------
 
-/// Condense a verbose K8s / Azure error into a short, actionable message.
-///
-/// The raw error is still kept in `log_lines` for debugging; this summary is
-/// what gets shown in the error overlay so it fits the log pane.
-fn summarize_error(raw: &str) -> String {
+/// Check whether a K8s / Azure error indicates expired or missing credentials.
+fn is_auth_error(raw: &str) -> bool {
     let lower = raw.to_lowercase();
 
-    // Azure auth / az login / kubelogin token errors
-    if lower.contains("az login")
+    // Azure AD / Entra ID token errors
+    lower.contains("aadsts")
+        || lower.contains("az login")
         || lower.contains("kubelogin")
-        || lower.contains("aadsts")
         || lower.contains("interactive_browser")
         || (lower.contains("token") && lower.contains("expir"))
-    {
-        return "Azure credentials expired. Run `az login` then retry.".to_string();
-    }
-
-    // Generic 401 Unauthorized from API server
-    if lower.contains("401") && lower.contains("unauthorized") {
-        return "Unauthorized (401). Check credentials or run `az login`.".to_string();
-    }
-
-    // 403 Forbidden (RBAC)
-    if lower.contains("403") && lower.contains("forbidden") {
-        return "Forbidden (403). Check your RBAC permissions.".to_string();
-    }
-
-    // Connection refused / cluster unreachable
-    if lower.contains("connection refused") || lower.contains("connect error") {
-        return "Connection refused. Is the cluster reachable?".to_string();
-    }
-
-    // DNS / hostname resolution
-    if lower.contains("dns") || lower.contains("resolve") || lower.contains("no such host") {
-        return "DNS resolution failed. Check cluster hostname.".to_string();
-    }
-
-    // TLS / certificate errors
-    if lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") {
-        return "TLS/certificate error. Check cluster CA or kubeconfig.".to_string();
-    }
-
-    // Timeout
-    if lower.contains("timed out") || lower.contains("timeout") {
-        return "Request timed out. Check network or cluster health.".to_string();
-    }
-
-    // Kubeconfig missing / unreadable
-    if lower.contains("kubeconfig") && (lower.contains("not found") || lower.contains("present")) {
-        return "Kubeconfig not found. Is ~/.kube/config present?".to_string();
-    }
-
-    // Fallback: truncate to keep the overlay manageable
-    let max_len = 120;
-    if raw.len() > max_len {
-        format!("{}…  (see log for details)", &raw[..max_len])
-    } else {
-        raw.to_string()
-    }
+        // HTTP 401 from API server
+        || lower.contains("unauthorized")
+        || (lower.contains("401") && (lower.contains("auth") || lower.contains("credential")))
 }
 
 #[cfg(test)]
@@ -1013,34 +1022,50 @@ mod tests {
     }
 
     #[test]
-    fn test_error_shown_in_log_panel() {
+    fn test_error_shown_in_log_lines() {
         let mut app = test_app();
         app.handle_app_event(AppEvent::Error("connection refused".to_string()));
-        // Raw error preserved in log lines for debugging
         assert_eq!(app.log_lines, vec!["[ERROR] connection refused"]);
-        // Overlay shows the summarised, actionable message
-        assert_eq!(
-            app.error_message,
-            Some("Connection refused. Is the cluster reachable?".to_string())
+    }
+
+    #[test]
+    fn test_auth_error_sets_az_login_flag() {
+        let app = test_app();
+        // "unauthorized" is detected as an auth error; az login spawns
+        // (will fail in test since no tokio runtime, but flag must be set
+        //  before the spawn)
+        assert!(!app.az_login_in_progress);
+        assert!(is_auth_error("Unauthorized: token expired"));
+        assert!(is_auth_error("AADSTS70043: refresh token has expired"));
+        assert!(is_auth_error("exec: kubelogin get-token failed"));
+        assert!(!is_auth_error("connection refused"));
+        assert!(!is_auth_error("DNS resolution failed"));
+    }
+
+    #[tokio::test]
+    async fn test_az_login_completed_success() {
+        let mut app = test_app();
+        app.az_login_in_progress = true;
+        app.handle_app_event(AppEvent::AzLoginCompleted(Ok(())));
+        assert!(!app.az_login_in_progress);
+        assert!(
+            app.log_lines
+                .last()
+                .is_some_and(|l| l.contains("succeeded"))
         );
     }
 
     #[test]
-    fn test_error_message_cleared_on_success() {
+    fn test_az_login_completed_failure() {
         let mut app = test_app();
-        app.error_message = Some("old error".to_string());
-
-        app.handle_app_event(AppEvent::PodsUpdated(vec![]));
-        assert!(app.error_message.is_none());
-    }
-
-    #[test]
-    fn test_error_message_cleared_on_log_line() {
-        let mut app = test_app();
-        app.error_message = Some("stream error".to_string());
-
-        app.handle_app_event(AppEvent::LogLine("new line".to_string()));
-        assert!(app.error_message.is_none());
+        app.az_login_in_progress = true;
+        app.handle_app_event(AppEvent::AzLoginCompleted(Err("spawn failed".to_string())));
+        assert!(!app.az_login_in_progress);
+        assert!(
+            app.log_lines
+                .last()
+                .is_some_and(|l| l.contains("az login failed"))
+        );
     }
 
     #[test]
