@@ -1,0 +1,159 @@
+version: "3"
+
+tasks:
+  # --- Core Development ---
+  fmt:
+    desc: "Format all Rust code"
+    cmds:
+      - cargo fmt --all
+
+  build:
+    desc: "Build in debug mode"
+    deps: [fmt]
+    cmds:
+      - cargo build
+
+  build:release:
+    desc: "Build optimized release binary"
+    deps: [check:all]
+    cmds:
+      - cargo build --release
+
+  check:
+    desc: "Run fmt, cargo check, and clippy"
+    deps: [fmt]
+    cmds:
+      - cargo check --all-targets
+      - cargo clippy --all-targets -- -D warnings
+
+  test:
+    desc: "Run all tests"
+    cmds:
+      - cargo test
+
+  test:verbose:
+    desc: "Run tests with output visible (--nocapture)"
+    cmds:
+      - cargo test -- --nocapture
+
+  check:all:
+    desc: "Run fmt, clippy, and tests"
+    cmds:
+      - task: fmt
+      - task: check
+      - task: test
+
+  # --- Run ---
+  run:
+    desc: "Run kube-log-viewer"
+    cmds:
+      - cargo run
+
+  run:release:
+    desc: "Run kube-log-viewer (release build)"
+    cmds:
+      - cargo run --release
+
+  # --- Install ---
+  install:
+    desc: "Install kube-log-viewer to ~/.cargo/bin"
+    deps: [check:all]
+    cmds:
+      - cargo install --path . --force
+
+  # --- Versioning ---
+  version:patch:
+    desc: "Bump patch version (0.1.0 -> 0.1.1)"
+    cmds:
+      - |
+        set -e
+        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+        NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+        sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        cargo generate-lockfile
+        echo "Bumped $CURRENT -> $NEXT"
+
+  version:minor:
+    desc: "Bump minor version (0.1.0 -> 0.2.0)"
+    cmds:
+      - |
+        set -e
+        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+        NEXT="$MAJOR.$((MINOR + 1)).0"
+        sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        cargo generate-lockfile
+        echo "Bumped $CURRENT -> $NEXT"
+
+  version:major:
+    desc: "Bump major version (0.1.0 -> 1.0.0)"
+    cmds:
+      - |
+        set -e
+        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+        NEXT="$((MAJOR + 1)).0.0"
+        sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        cargo generate-lockfile
+        echo "Bumped $CURRENT -> $NEXT"
+
+  version:tag:
+    desc: "Git tag current version as v<version>"
+    cmds:
+      - |
+        set -e
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        git tag "v$VERSION"
+        echo "Tagged v$VERSION"
+
+  # --- Release & Distribution ---
+  release:
+    desc: "Bump patch, commit, tag, and push"
+    cmds:
+      - task: version:patch
+      - |
+        set -e
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to $VERSION"
+        git tag "v$VERSION"
+        git push && git push origin "v$VERSION"
+        echo "Pushed v$VERSION"
+
+  release:minor:
+    desc: "Bump minor, commit, tag, and push"
+    cmds:
+      - task: version:minor
+      - |
+        set -e
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to $VERSION"
+        git tag "v$VERSION"
+        git push && git push origin "v$VERSION"
+        echo "Pushed v$VERSION"
+
+  release:major:
+    desc: "Bump major, commit, tag, and push"
+    cmds:
+      - task: version:major
+      - |
+        set -e
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        git add Cargo.toml Cargo.lock
+        git commit -m "chore: bump version to $VERSION"
+        git tag "v$VERSION"
+        git push && git push origin "v$VERSION"
+        echo "Pushed v$VERSION"
+
+  # --- Code Quality ---
+  loc:
+    desc: "Show lines of code statistics using tokei"
+    cmds:
+      - tokei
+
+  clean:
+    desc: "Remove build artifacts"
+    cmds:
+      - cargo clean
