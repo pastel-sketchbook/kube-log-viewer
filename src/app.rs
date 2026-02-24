@@ -485,10 +485,15 @@ impl App {
             }
             AppEvent::Error(msg) => {
                 error!(message = %msg, "background task error");
-                self.log_lines.push(format!("[ERROR] {msg}"));
-
-                if is_auth_error(&msg) && !self.az_login_in_progress {
-                    self.spawn_az_login();
+                if is_auth_error(&msg) {
+                    self.log_lines.push(format!(
+                        "[ERROR] {msg} (Azure credentials expired — run `az login`)"
+                    ));
+                    if !self.az_login_in_progress {
+                        self.spawn_az_login();
+                    }
+                } else {
+                    self.log_lines.push(format!("[ERROR] {msg}"));
                 }
             }
         }
@@ -522,7 +527,7 @@ impl App {
                 }
                 Err(e) => {
                     error!(error = %e, "failed to load contexts");
-                    let _ = tx.send(AppEvent::Error(format!("Failed to load contexts: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("Failed to load contexts: {e:#}")));
                 }
             }
         });
@@ -539,7 +544,7 @@ impl App {
                 }
                 Err(e) => {
                     error!(error = %e, "failed to load namespaces");
-                    let _ = tx.send(AppEvent::Error(format!("Failed to load namespaces: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("Failed to load namespaces: {e:#}")));
                 }
             }
         });
@@ -561,7 +566,7 @@ impl App {
                 }
                 Err(e) => {
                     error!(error = %e, "failed to load pods");
-                    let _ = tx.send(AppEvent::Error(format!("Failed to load pods: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("Failed to load pods: {e:#}")));
                 }
             }
         });
@@ -596,7 +601,7 @@ impl App {
                 }
                 Err(e) => {
                     error!(error = %e, "log stream failed");
-                    let _ = tx.send(AppEvent::Error(format!("Log stream error: {e}")));
+                    let _ = tx.send(AppEvent::Error(format!("Log stream error: {e:#}")));
                 }
             }
         });
@@ -621,6 +626,7 @@ impl App {
         tokio::spawn(async move {
             let result = tokio::process::Command::new("az")
                 .arg("login")
+                .stdin(std::process::Stdio::null())
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::piped())
                 .spawn();

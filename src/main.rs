@@ -1,3 +1,5 @@
+use std::os::unix::io::AsRawFd;
+
 use anyhow::{Context, Result};
 use crossterm::{
     execute,
@@ -67,6 +69,16 @@ async fn main() -> Result<()> {
     execute!(stdout, EnterAlternateScreen).context("failed to enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend).context("failed to create terminal")?;
+
+    // Redirect stderr to /dev/null so that subprocess output (e.g. kubelogin,
+    // az CLI exec plugins) does not write directly to the terminal and corrupt
+    // the TUI display. Errors are captured via kube client results and shown
+    // in the log pane instead.
+    let devnull = std::fs::File::open("/dev/null").context("failed to open /dev/null")?;
+    // SAFETY: dup2 is a standard POSIX call; fd 2 (stderr) is always valid.
+    unsafe {
+        libc::dup2(devnull.as_raw_fd(), libc::STDERR_FILENO);
+    }
 
     // Run app
     let result = App::run(&mut terminal).await;
