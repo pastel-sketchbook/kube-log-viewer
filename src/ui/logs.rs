@@ -1,8 +1,20 @@
+use std::sync::LazyLock;
+
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use regex::Regex;
 
 use crate::app::{App, Focus, InputMode};
 use crate::ui::theme::Theme;
+
+/// Matches ISO 8601 / RFC 3339 timestamps at the start of a log line.
+/// Covers K8s native format (`2024-01-15T10:00:00Z`, `…T10:00:00.123456789Z`)
+/// and common application formats (`2024-01-15 10:00:00`, `…10:00:00,123`).
+static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // Safety: this is a hardcoded literal that is guaranteed to compile.
+    Regex::new(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*")
+        .expect("hardcoded timestamp regex is valid")
+});
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let title = match (&app.selected_pod, &app.selected_container) {
@@ -92,14 +104,30 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn colorize_log_line<'a>(line: &'a str, theme: &Theme) -> Vec<Span<'a>> {
-    if line.contains("ERROR") || line.contains("error") {
-        vec![Span::styled(line, Style::default().fg(theme.log_error))]
+    let level_color = if line.contains("ERROR") || line.contains("error") {
+        Some(theme.log_error)
     } else if line.contains("WARN") || line.contains("warn") {
-        vec![Span::styled(line, Style::default().fg(theme.log_warn))]
+        Some(theme.log_warn)
     } else if line.contains("DEBUG") || line.contains("debug") {
-        vec![Span::styled(line, Style::default().fg(theme.log_debug))]
+        Some(theme.log_debug)
     } else {
-        vec![Span::raw(line)]
+        None
+    };
+
+    if let Some(m) = TIMESTAMP_RE.find(line) {
+        let ts = &line[..m.end()];
+        let rest = &line[m.end()..];
+        let ts_span = Span::styled(ts, Style::default().fg(theme.muted));
+        let rest_span = match level_color {
+            Some(color) => Span::styled(rest, Style::default().fg(color)),
+            None => Span::raw(rest),
+        };
+        vec![ts_span, rest_span]
+    } else {
+        match level_color {
+            Some(color) => vec![Span::styled(line, Style::default().fg(color))],
+            None => vec![Span::raw(line)],
+        }
     }
 }
 
@@ -139,36 +167,86 @@ mod tests {
     // -- colorize_log_line --------------------------------------------------
 
     #[test]
-    fn test_colorize_error_line() {
-        let spans = colorize_log_line("2024-01-01 ERROR something broke", &DARK);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].style.fg, Some(DARK.log_error));
+    fn test_colorize_error_line_with_timestamp() {
+        let spans = colorize_log_line("2024-01-01 10:00:00 ERROR something broke", &DARK);
+        assert_eq!(spans.len(), 2);
+        // Timestamp in muted
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        // Rest in error color
+        assert_eq!(spans[1].style.fg, Some(DARK.log_error));
+        assert!(spans[1].content.contains("ERROR"));
     }
 
     #[test]
-    fn test_colorize_warn_line() {
-        let spans = colorize_log_line("2024-01-01 WARN low memory", &DARK);
-        assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].style.fg, Some(DARK.log_warn));
+    fn test_colorize_warn_line_with_timestamp() {
+        let spans = colorize_log_line("2024-01-01 10:00:00 WARN low memory", &DARK);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[1].style.fg, Some(DARK.log_warn));
     }
 
     #[test]
-    fn test_colorize_debug_line() {
+    fn test_colorize_debug_line_no_timestamp() {
         let spans = colorize_log_line("DEBUG: detailed trace info", &DARK);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(DARK.log_debug));
     }
 
     #[test]
-    fn test_colorize_info_line_is_unstyled() {
+    fn test_colorize_info_line_no_timestamp() {
         let spans = colorize_log_line("INFO: server started on port 8080", &DARK);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, None);
     }
 
     #[test]
-    fn test_colorize_lowercase_error() {
+    fn test_colorize_lowercase_error_no_timestamp() {
         let spans = colorize_log_line("an error occurred in module", &DARK);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].style.fg, Some(DARK.log_error));
+    }
+
+    #[test]
+    fn test_timestamp_rfc3339_z() {
+        let spans = colorize_log_line("2024-01-15T10:00:00Z INFO started", &DARK);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "2024-01-15T10:00:00Z ");
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        // "INFO started" — no level keyword match (INFO not handled as special)
+        assert_eq!(spans[1].style.fg, None);
+    }
+
+    #[test]
+    fn test_timestamp_rfc3339_fractional() {
+        let spans = colorize_log_line("2024-01-15T10:00:00.123456789Z ERROR fail", &DARK);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "2024-01-15T10:00:00.123456789Z ");
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[1].style.fg, Some(DARK.log_error));
+    }
+
+    #[test]
+    fn test_timestamp_space_separated() {
+        let spans = colorize_log_line("2024-01-15 10:00:00 request handled", &DARK);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "2024-01-15 10:00:00 ");
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+    }
+
+    #[test]
+    fn test_timestamp_with_offset() {
+        let spans = colorize_log_line("2024-01-15T10:00:00+05:30 WARN slow", &DARK);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "2024-01-15T10:00:00+05:30 ");
+        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[1].style.fg, Some(DARK.log_warn));
+    }
+
+    #[test]
+    fn test_no_timestamp_line() {
+        let spans = colorize_log_line("[ERROR] connection refused", &DARK);
+        // No timestamp detected, entire line styled as error
+        assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].style.fg, Some(DARK.log_error));
     }
 
