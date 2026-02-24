@@ -30,6 +30,7 @@ pub async fn stream_logs(
     let params = LogParams {
         follow: true,
         tail_lines: Some(100),
+        timestamps: true,
         container: container.map(|s| s.to_string()),
         ..Default::default()
     };

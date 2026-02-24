@@ -38,11 +38,15 @@ const MSG_KEYS: &[&str] = &["msg", "message"];
 /// The output is designed to feed into `colorize_log_line()` so that
 /// the extracted timestamp gets muted color and the level gets keyword color.
 fn format_json_line(line: &str) -> Cow<'_, str> {
-    if !line.starts_with('{') {
-        return Cow::Borrowed(line);
-    }
+    // Detect optional K8s timestamp prefix (from LogParams.timestamps=true).
+    // Lines may look like: `2026-02-24T16:36:51.600Z {"time":"...","msg":"hello"}`
+    let (ts_prefix, json_part) = match TIMESTAMP_RE.find(line) {
+        Some(m) if line[m.end()..].starts_with('{') => (&line[..m.end()], &line[m.end()..]),
+        _ if line.starts_with('{') => ("", line),
+        _ => return Cow::Borrowed(line),
+    };
 
-    let obj = match serde_json::from_str::<Value>(line) {
+    let obj = match serde_json::from_str::<Value>(json_part) {
         Ok(Value::Object(map)) => map,
         _ => return Cow::Borrowed(line),
     };
@@ -50,15 +54,25 @@ fn format_json_line(line: &str) -> Cow<'_, str> {
     let mut parts: Vec<String> = Vec::new();
     let mut used_keys: Vec<&str> = Vec::new();
 
-    // 1. Extract timestamp
-    for &key in TIME_KEYS {
-        if let Some(val) = obj.get(key)
-            && let Some(s) = val.as_str()
-            && !s.is_empty()
-        {
-            parts.push(s.to_string());
-            used_keys.push(key);
-            break;
+    // 1. Extract timestamp: prefer K8s prefix when present
+    if !ts_prefix.is_empty() {
+        parts.push(ts_prefix.trim_end().to_string());
+        // Mark JSON time fields as used so they don't appear as key=value
+        for &key in TIME_KEYS {
+            if obj.contains_key(key) {
+                used_keys.push(key);
+            }
+        }
+    } else {
+        for &key in TIME_KEYS {
+            if let Some(val) = obj.get(key)
+                && let Some(s) = val.as_str()
+                && !s.is_empty()
+            {
+                parts.push(s.to_string());
+                used_keys.push(key);
+                break;
+            }
         }
     }
 
@@ -157,7 +171,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(i, line)| {
             let s: &str = line.as_ref();
             let mut styled = if !app.search_query.is_empty() {
-                highlight_search(s, &app.search_query, theme)
+                highlight_search(s, &app.search_query, theme, app.timestamp_mode)
             } else {
                 Line::from(colorize_log_line(s, theme, app.timestamp_mode))
             };
@@ -288,20 +302,34 @@ fn colorize_log_line<'a>(
     }
 }
 
-fn highlight_search<'a>(line: &'a str, query: &str, theme: &Theme) -> Line<'a> {
-    let lower_line = line.to_lowercase();
+fn highlight_search(
+    line: &str,
+    query: &str,
+    theme: &Theme,
+    timestamp_mode: TimestampMode,
+) -> Line<'static> {
+    // Apply timestamp conversion so search operates on what the user sees
+    let display: String = match TIMESTAMP_RE.find(line) {
+        Some(m) => match convert_timestamp(&line[..m.end()], timestamp_mode) {
+            Some(converted) => format!("{}{}", converted, &line[m.end()..]),
+            None => line.to_string(),
+        },
+        None => line.to_string(),
+    };
+
+    let lower_line = display.to_lowercase();
     let lower_query = query.to_lowercase();
 
-    let mut spans = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
     let mut last_end = 0;
 
     for (start, _) in lower_line.match_indices(&lower_query) {
         if start > last_end {
-            spans.push(Span::raw(&line[last_end..start]));
+            spans.push(Span::raw(display[last_end..start].to_string()));
         }
         let end = start + query.len();
         spans.push(Span::styled(
-            &line[start..end],
+            display[start..end].to_string(),
             Style::default()
                 .fg(theme.search_match_fg)
                 .bg(theme.search_match_bg),
@@ -309,8 +337,8 @@ fn highlight_search<'a>(line: &'a str, query: &str, theme: &Theme) -> Line<'a> {
         last_end = end;
     }
 
-    if last_end < line.len() {
-        spans.push(Span::raw(&line[last_end..]));
+    if last_end < display.len() {
+        spans.push(Span::raw(display[last_end..].to_string()));
     }
 
     Line::from(spans)
@@ -440,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_highlight_single_match() {
-        let line = highlight_search("hello world", "world", &DARK);
+        let line = highlight_search("hello world", "world", &DARK, TimestampMode::Utc);
         assert_eq!(line.spans.len(), 2);
         assert_eq!(line.spans[0].content, "hello ");
         assert_eq!(line.spans[1].content, "world");
@@ -450,21 +478,21 @@ mod tests {
 
     #[test]
     fn test_highlight_multiple_matches() {
-        let line = highlight_search("error in error handler", "error", &DARK);
+        let line = highlight_search("error in error handler", "error", &DARK, TimestampMode::Utc);
         let texts: Vec<&str> = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["error", " in ", "error", " handler"]);
     }
 
     #[test]
     fn test_highlight_case_insensitive() {
-        let line = highlight_search("ERROR: fatal", "error", &DARK);
+        let line = highlight_search("ERROR: fatal", "error", &DARK, TimestampMode::Utc);
         assert_eq!(line.spans[0].content, "ERROR");
         assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
     }
 
     #[test]
     fn test_highlight_no_match() {
-        let line = highlight_search("hello world", "xyz", &DARK);
+        let line = highlight_search("hello world", "xyz", &DARK, TimestampMode::Utc);
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].content, "hello world");
         assert_eq!(line.spans[0].style.bg, None);
@@ -472,7 +500,7 @@ mod tests {
 
     #[test]
     fn test_highlight_match_at_start() {
-        let line = highlight_search("abc def", "abc", &DARK);
+        let line = highlight_search("abc def", "abc", &DARK, TimestampMode::Utc);
         let texts: Vec<&str> = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["abc", " def"]);
         assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
@@ -480,7 +508,7 @@ mod tests {
 
     #[test]
     fn test_highlight_match_at_end() {
-        let line = highlight_search("foo bar", "bar", &DARK);
+        let line = highlight_search("foo bar", "bar", &DARK, TimestampMode::Utc);
         let texts: Vec<&str> = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(texts, vec!["foo ", "bar"]);
         assert_eq!(line.spans[1].style.bg, Some(DARK.search_match_bg));
@@ -488,10 +516,28 @@ mod tests {
 
     #[test]
     fn test_highlight_entire_line() {
-        let line = highlight_search("test", "test", &DARK);
+        let line = highlight_search("test", "test", &DARK, TimestampMode::Utc);
         assert_eq!(line.spans.len(), 1);
         assert_eq!(line.spans[0].content, "test");
         assert_eq!(line.spans[0].style.bg, Some(DARK.search_match_bg));
+    }
+
+    #[test]
+    fn test_highlight_converts_timestamp_in_relative_mode() {
+        let line = highlight_search(
+            "2026-02-24T16:36:51Z ERROR fail",
+            "ago",
+            &DARK,
+            TimestampMode::Relative,
+        );
+        // Timestamp should be converted to relative, and "ago" should match
+        let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(full_text.contains("ago"));
+        assert!(
+            line.spans
+                .iter()
+                .any(|s| s.style.bg == Some(DARK.search_match_bg))
+        );
     }
 
     // -- format_json_line ---------------------------------------------------
@@ -605,6 +651,29 @@ mod tests {
         // Should detect ERROR and color it
         let has_error_color = spans.iter().any(|s| s.style.fg == Some(DARK.log_error));
         assert!(has_error_color);
+    }
+
+    #[test]
+    fn test_json_with_k8s_timestamp_prefix() {
+        // When LogParams.timestamps=true, K8s prepends a timestamp before JSON
+        let line = r#"2026-02-24T16:36:51.600Z {"time":"2026-02-24T16:36:51.600Z","level":"error","msg":"fail","status":500}"#;
+        let result = format_json_line(line);
+        // K8s timestamp should be used (not duplicated from JSON)
+        assert!(result.starts_with("2026-02-24T16:36:51.600Z"));
+        assert!(result.contains("[ERROR]"));
+        assert!(result.contains("fail"));
+        assert!(result.contains("status=500"));
+        // JSON time field should NOT appear as key=value
+        assert!(!result.contains("time="));
+    }
+
+    #[test]
+    fn test_json_with_k8s_prefix_non_json_remainder() {
+        // K8s timestamp prefix followed by plain text (not JSON)
+        let line = "2026-02-24T16:36:51.600Z plain text log line";
+        let result = format_json_line(line);
+        // Should be returned as-is (no JSON flattening)
+        assert_eq!(result.as_ref(), line);
     }
 
     // -- parse_log_timestamp ------------------------------------------------
