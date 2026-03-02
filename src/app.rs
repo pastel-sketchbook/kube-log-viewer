@@ -11,6 +11,7 @@ use tracing::{debug, error, info};
 
 use crate::event::AppEvent;
 use crate::k8s;
+use crate::prefs;
 use crate::ui;
 use crate::ui::theme::{THEMES, Theme};
 
@@ -271,7 +272,7 @@ impl App {
             stream_mode: StreamMode::default(),
             active_pane: 0,
 
-            theme_index: 0,
+            theme_index: prefs::theme_index_from_prefs(&prefs::load()),
 
             az_login_in_progress: false,
             az_login_cancel: None,
@@ -835,6 +836,7 @@ impl App {
 
     pub fn cycle_theme(&mut self) {
         self.theme_index = (self.theme_index + 1) % THEMES.len();
+        prefs::save(&prefs::prefs_from_theme_index(self.theme_index));
     }
 
     pub fn filtered_log_lines(&self) -> Vec<&TaggedLine> {
