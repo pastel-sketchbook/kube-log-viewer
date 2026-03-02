@@ -12,5 +12,8 @@
 .DS_Store
 Thumbs.db
 
+# Environment / secrets
+.env*
+
 # Local skill/reference files (not committed)
 .skills/

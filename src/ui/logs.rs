@@ -295,7 +295,9 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
                     if w == 0 { 1 } else { w.div_ceil(text_width) }
                 })
                 .sum();
-            total_visual.saturating_sub(inner_height) as u16
+            total_visual
+                .saturating_sub(inner_height)
+                .min(u16::MAX as usize) as u16
         } else {
             0
         }
@@ -331,11 +333,14 @@ fn render_split(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
     let pct = (100 / n) as u16;
+    let n_u16 = n as u16; // n <= MAX_STREAMS (4), always fits u16
     let constraints: Vec<Constraint> = (0..n)
         .map(|i| {
-            if i == n - 1 {
+            if i == n.saturating_sub(1) {
                 // Last pane absorbs rounding remainder
-                Constraint::Percentage(100 - pct * (n as u16 - 1))
+                Constraint::Percentage(
+                    100u16.saturating_sub(pct.saturating_mul(n_u16.saturating_sub(1))),
+                )
             } else {
                 Constraint::Percentage(pct)
             }
@@ -456,7 +461,9 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
                     if w == 0 { 1 } else { w.div_ceil(text_width) }
                 })
                 .sum();
-            total_visual.saturating_sub(inner_height) as u16
+            total_visual
+                .saturating_sub(inner_height)
+                .min(u16::MAX as usize) as u16
         } else {
             0
         }
