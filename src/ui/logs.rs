@@ -245,11 +245,17 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
             // Prepend pod tag in merged mode
             if let Some(src) = source {
                 let color = stream_color(app, src);
-                // Truncate to last 20 chars for compact display
-                let tag = if src.len() > 20 {
-                    &src[src.len() - 20..]
+                // Middle-truncate long pod names to keep the meaningful prefix
+                // and unique suffix (e.g. "my-deploy…-x9k2z" instead of
+                // losing the prefix by taking last N chars).
+                let tag: std::borrow::Cow<'_, str> = if src.len() > 20 {
+                    let prefix_len = 10;
+                    let suffix_len = 9; // 10 + 1 (ellipsis) + 9 = 20
+                    let prefix = &src[..prefix_len];
+                    let suffix = &src[src.len() - suffix_len..];
+                    std::borrow::Cow::Owned(format!("{prefix}\u{2026}{suffix}"))
                 } else {
-                    src
+                    std::borrow::Cow::Borrowed(src)
                 };
                 spans.push(Span::styled(
                     format!("[{tag}] "),

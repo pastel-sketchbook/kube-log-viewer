@@ -75,8 +75,8 @@ Implementation roadmap organized in phases. Each phase builds on the previous.
 - [ ] README: add screenshot / demo GIF
 - [ ] Regex search mode (toggle between substring and regex)
 - [x] Pod auto-refresh via `kube::runtime::watcher`
-- [ ] Log export to file
+- [x] Log export to file
 - [ ] Config file for themes / keybindings
 - [x] Timestamp display modes: UTC / Local / Relative (`T` cycle)
 - [x] Time range filtering popup (`R`) with predefined ranges
-- [ ] Multiple simultaneous log streams (split pane)
+- [x] Multiple simultaneous log streams (split pane)

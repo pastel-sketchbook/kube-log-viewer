@@ -1,3 +1,4 @@
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
 use anyhow::{Context, Result};
@@ -21,12 +22,19 @@ fn init_tracing() -> Option<tracing_appender::non_blocking::WorkerGuard> {
     // Best-effort directory creation -- if it fails we silently skip tracing
     std::fs::create_dir_all(&data_dir).ok()?;
 
-    // Housekeeping: remove old rotated log files from previous runs.
+    // Housekeeping: keep only the 3 most recent log files from previous runs.
     // The daily appender creates files like `kube-log-viewer.log.2026-02-23`.
-    // We delete everything in the directory so today's session starts fresh.
     if let Ok(entries) = std::fs::read_dir(&data_dir) {
-        for entry in entries.flatten() {
-            let _ = std::fs::remove_file(entry.path());
+        let mut files: Vec<_> = entries.flatten().filter(|e| e.path().is_file()).collect();
+        // Sort by modification time, newest first
+        files.sort_by(|a, b| {
+            let t_a = a.metadata().and_then(|m| m.modified()).ok();
+            let t_b = b.metadata().and_then(|m| m.modified()).ok();
+            t_b.cmp(&t_a)
+        });
+        // Delete everything beyond the 3 newest
+        for old in files.into_iter().skip(3) {
+            let _ = std::fs::remove_file(old.path());
         }
     }
 
@@ -78,10 +86,13 @@ async fn main() -> Result<()> {
     // az CLI exec plugins) does not write directly to the terminal and corrupt
     // the TUI display. Errors are captured via kube client results and shown
     // in the log pane instead.
-    let devnull = std::fs::File::open("/dev/null").context("failed to open /dev/null")?;
-    // SAFETY: dup2 is a standard POSIX call; fd 2 (stderr) is always valid.
-    unsafe {
-        libc::dup2(devnull.as_raw_fd(), libc::STDERR_FILENO);
+    #[cfg(unix)]
+    {
+        let devnull = std::fs::File::open("/dev/null").context("failed to open /dev/null")?;
+        // SAFETY: dup2 is a standard POSIX call; fd 2 (stderr) is always valid.
+        unsafe {
+            libc::dup2(devnull.as_raw_fd(), libc::STDERR_FILENO);
+        }
     }
 
     // Run app

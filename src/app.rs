@@ -229,6 +229,9 @@ pub struct App {
     /// Cancellation sender for the `az login` background task.
     az_login_cancel: Option<watch::Sender<bool>>,
 
+    // Terminal dimensions (updated on Resize events)
+    pub last_terminal_height: u16,
+
     // Control
     pub should_quit: bool,
 
@@ -279,6 +282,7 @@ impl App {
             az_login_in_progress: false,
             az_login_cancel: None,
 
+            last_terminal_height: 24,
             should_quit: false,
             tx,
             pod_watcher_cancel: None,
@@ -305,7 +309,7 @@ impl App {
                 maybe_event = event_stream.next() => {
                     match maybe_event {
                         Some(Ok(Event::Key(key))) => app.handle_key(key),
-                        Some(Ok(Event::Resize(_, _))) => { /* re-render on next loop */ }
+                        Some(Ok(Event::Resize(_, h))) => { app.last_terminal_height = h; }
                         Some(Err(_)) | None => break,
                         _ => {}
                     }
@@ -559,23 +563,31 @@ impl App {
         }
     }
 
+    /// Number of lines to jump for page-up / page-down.
+    /// Uses roughly half the terminal height so the user retains context.
+    fn page_size(&self) -> usize {
+        (self.last_terminal_height as usize / 2).max(1)
+    }
+
     fn page_up(&mut self) {
+        let page = self.page_size();
         match (self.focus, self.stream_mode) {
             (Focus::Pods, _) => {}
             (Focus::Logs, StreamMode::Split) => {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
                     handle.follow_mode = false;
-                    handle.scroll_offset = handle.scroll_offset.saturating_sub(20);
+                    handle.scroll_offset = handle.scroll_offset.saturating_sub(page);
                 }
             }
             (Focus::Logs, _) => {
                 self.follow_mode = false;
-                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(20);
+                self.log_scroll_offset = self.log_scroll_offset.saturating_sub(page);
             }
         }
     }
 
     fn page_down(&mut self) {
+        let page = self.page_size();
         match (self.focus, self.stream_mode) {
             (Focus::Pods, _) => {}
             (Focus::Logs, StreamMode::Split) => {
@@ -584,12 +596,12 @@ impl App {
                     .len()
                     .saturating_sub(1);
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.scroll_offset = (handle.scroll_offset + 20).min(max);
+                    handle.scroll_offset = (handle.scroll_offset + page).min(max);
                 }
             }
             (Focus::Logs, _) => {
                 let max = self.filtered_log_lines().len().saturating_sub(1);
-                self.log_scroll_offset = (self.log_scroll_offset + 20).min(max);
+                self.log_scroll_offset = (self.log_scroll_offset + page).min(max);
             }
         }
     }
@@ -798,8 +810,19 @@ impl App {
                     self.log_lines.drain(..10_000);
                 }
             }
-            AppEvent::LogStreamEnded => {
-                debug!("log stream ended");
+            AppEvent::LogStreamEnded(source) => {
+                debug!(pod = %source, "log stream ended");
+                // Remove the dead stream handle so stale panes don't linger.
+                if let Some(pos) = self.streams.iter().position(|h| h.pod_name == source) {
+                    self.streams.remove(pos);
+                    // Return to single mode when only one (or zero) streams remain
+                    if self.streams.len() <= 1 {
+                        self.stream_mode = StreamMode::Single;
+                        self.active_pane = 0;
+                    } else if self.active_pane >= self.streams.len() {
+                        self.active_pane = self.streams.len().saturating_sub(1);
+                    }
+                }
             }
             AppEvent::AzLoginCompleted(result) => {
                 self.az_login_in_progress = false;
@@ -866,7 +889,8 @@ impl App {
             }
         };
 
-        self.log_lines
+        let mut lines: Vec<&TaggedLine> = self
+            .log_lines
             .iter()
             .filter(|tl| {
                 // Health check filter: hide lines containing both
@@ -893,7 +917,22 @@ impl App {
                 // Lines without parseable timestamps are always included
                 true
             })
-            .collect()
+            .collect();
+
+        // In merged mode with multiple streams, sort by timestamp so lines
+        // from different pods interleave chronologically.  Lines without a
+        // parseable timestamp use DateTime::MAX_UTC so they sort to the end,
+        // and stable sort preserves their relative arrival order.
+        if self.stream_mode == StreamMode::Merged && self.streams.len() > 1 {
+            lines.sort_by_cached_key(|tl| {
+                ui::logs::TIMESTAMP_RE
+                    .find(&tl.line)
+                    .and_then(|m| ui::logs::parse_log_timestamp(&tl.line[..m.end()]))
+                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC)
+            });
+        }
+
+        lines
     }
 
     /// Filter log lines for a specific pane in split mode.
@@ -1016,7 +1055,7 @@ impl App {
             .await
             {
                 Ok(()) => {
-                    let _ = tx.send(AppEvent::LogStreamEnded);
+                    let _ = tx.send(AppEvent::LogStreamEnded(pod));
                 }
                 Err(e) => {
                     error!(error = %e, "log stream failed");

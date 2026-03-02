@@ -14,7 +14,9 @@ pub enum AppEvent {
     /// Empty source string indicates a system/internal message.
     LogLine(String, String),
     /// The log stream has ended (pod terminated, stream closed, etc.)
-    LogStreamEnded,
+    /// Payload is the source pod name so the correct stream handle can be
+    /// cleaned up in multi-stream mode.
+    LogStreamEnded(String),
     /// `az login` completed (success or failure message)
     AzLoginCompleted(Result<(), String>),
     /// Log export completed successfully — payload is the file path

@@ -8,7 +8,7 @@
 Debugging microservices often requires correlating logs from multiple pods simultaneously. The current single-stream design forces users to switch between pods, losing temporal context. Two complementary viewing modes address different workflows:
 
 1. **Merged view** — all streams interleaved chronologically in one pane, each line prefixed with a color-coded `[pod-name]` tag. Best for tracing request flows across services.
-2. **Split view** — two horizontal panes (top/bottom), each showing one stream independently. Best for comparing behavior between two specific pods (e.g., old vs new replica).
+2. **Split view** — up to four horizontal panes (top/bottom), each showing one stream independently. Best for comparing behavior between specific pods (e.g., old vs new replicas).
 
 Vertical split was rejected because log lines are already wide (timestamps + JSON flattening); halving width makes them unreadable.
 
@@ -38,7 +38,7 @@ Vertical split was rejected because log lines are already wide (timestamps + JSO
 ### Rendering
 
 - **Merged:** Single log pane. Each line rendered with a `[short-pod-name]` prefix span in the stream's assigned color, followed by the normal colorized log content.
-- **Split:** Log area divided into two equal `Rect` regions (top/bottom). Each pane renders independently with its own scroll offset, follow mode, and border title showing the pod name. Focus switches between panes via number keys `1`/`2`.
+- **Split:** Log area divided into up to four equal `Rect` regions (top/bottom). Each pane renders independently with its own scroll offset, follow mode, and border title showing the pod name. Focus switches between panes via number keys `1`–`4`.
 - **Color assignment:** A fixed 6-color palette (`Cyan, Yellow, Magenta, Green, Red, Blue`). Stream index modulo palette length determines color.
 
 ### Scroll State
@@ -56,4 +56,4 @@ Vertical split was rejected because log lines are already wide (timestamps + JSO
 - `AppEvent::LogLine` gains a source field — `k8s/logs.rs` must receive and forward the pod name.
 - Split mode adds per-pane scroll state, increasing `App` complexity.
 - Maximum 4 streams prevents resource exhaustion from too many concurrent K8s API connections.
-- Lines arrive in approximate timestamp order from K8s; no explicit sorting needed for merged view.
+- Lines from different streams are sorted by parsed timestamp in merged mode for correct chronological interleaving.
