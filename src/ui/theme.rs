@@ -6,6 +6,7 @@ pub struct Theme {
     pub name: &'static str,
 
     // Base
+    pub bg: Color,
     pub fg: Color,
     pub muted: Color,
     pub accent: Color,
@@ -75,6 +76,7 @@ pub const THEMES: &[Theme] = &[
 pub const DARK: Theme = Theme {
     name: "Dark",
 
+    bg: Color::Rgb(16, 16, 16),
     fg: Color::White,
     muted: Color::DarkGray,
     accent: Color::Cyan,
@@ -95,7 +97,7 @@ pub const DARK: Theme = Theme {
     log_error: Color::Red,
     log_warn: Color::Yellow,
     log_debug: Color::DarkGray,
-    zebra_bg: Color::Rgb(25, 25, 25),
+    zebra_bg: Color::Rgb(38, 38, 38),
 
     highlight_bg: Color::DarkGray,
 
@@ -117,6 +119,7 @@ pub const DARK: Theme = Theme {
 pub const GRUVBOX_DARK: Theme = Theme {
     name: "Gruvbox Dark",
 
+    bg: Color::Rgb(0x1d, 0x20, 0x21),     // #1d2021 (bg0_h)
     fg: Color::Rgb(0xeb, 0xdb, 0xb2),     // #ebdbb2
     muted: Color::Rgb(0x92, 0x83, 0x74),  // #928374
     accent: Color::Rgb(0xd7, 0x99, 0x21), // #d79921
@@ -137,7 +140,7 @@ pub const GRUVBOX_DARK: Theme = Theme {
     log_error: Color::Rgb(0xf0, 0x65, 0x55),
     log_warn: Color::Rgb(0xfa, 0xbd, 0x2f),
     log_debug: Color::Rgb(0x92, 0x83, 0x74),
-    zebra_bg: Color::Rgb(0x28, 0x28, 0x28), // list.even.background
+    zebra_bg: Color::Rgb(0x30, 0x33, 0x34), // bg0_h + 19
 
     highlight_bg: Color::Rgb(0x3c, 0x38, 0x36), // #3c3836
 
@@ -159,6 +162,7 @@ pub const GRUVBOX_DARK: Theme = Theme {
 pub const SOLARIZED_DARK: Theme = Theme {
     name: "Solarized Dark",
 
+    bg: Color::Rgb(0x00, 0x2b, 0x36),     // #002b36 (base03)
     fg: Color::Rgb(0x93, 0xa1, 0xa1),     // base1
     muted: Color::Rgb(0x58, 0x6e, 0x75),  // base01
     accent: Color::Rgb(0x26, 0x8b, 0xd2), // blue
@@ -179,7 +183,7 @@ pub const SOLARIZED_DARK: Theme = Theme {
     log_error: Color::Rgb(0xdc, 0x32, 0x2f),
     log_warn: Color::Rgb(0xb5, 0x89, 0x00),
     log_debug: Color::Rgb(0x58, 0x6e, 0x75),
-    zebra_bg: Color::Rgb(0x07, 0x36, 0x42), // base02
+    zebra_bg: Color::Rgb(0x0b, 0x3a, 0x48), // base02 brightened
 
     highlight_bg: Color::Rgb(0x07, 0x36, 0x42), // base02
 
@@ -201,6 +205,7 @@ pub const SOLARIZED_DARK: Theme = Theme {
 pub const FLEXOKI_DARK: Theme = Theme {
     name: "Flexoki Dark",
 
+    bg: Color::Rgb(0x10, 0x0f, 0x0f),     // #100F0F
     fg: Color::Rgb(0xce, 0xcd, 0xc3),     // #CECDC3
     muted: Color::Rgb(0x87, 0x85, 0x80),  // #878580
     accent: Color::Rgb(0x24, 0x83, 0x7b), // cyan / primary
@@ -221,7 +226,7 @@ pub const FLEXOKI_DARK: Theme = Theme {
     log_error: Color::Rgb(0xd1, 0x4d, 0x41),
     log_warn: Color::Rgb(0xd0, 0xa2, 0x15),
     log_debug: Color::Rgb(0x57, 0x56, 0x53), // #575653
-    zebra_bg: Color::Rgb(0x1c, 0x1b, 0x1a),  // list.even.background
+    zebra_bg: Color::Rgb(0x26, 0x25, 0x24),  // bg + 22
 
     highlight_bg: Color::Rgb(0x1c, 0x1b, 0x1a), // #1C1B1A
 
@@ -243,6 +248,7 @@ pub const FLEXOKI_DARK: Theme = Theme {
 pub const AYU_DARK: Theme = Theme {
     name: "Ayu Dark",
 
+    bg: Color::Rgb(0x0d, 0x10, 0x16),     // #0D1016
     fg: Color::Rgb(0xbf, 0xbd, 0xb6),     // #bfbdb6
     muted: Color::Rgb(0x52, 0x51, 0x4f),  // #52514f
     accent: Color::Rgb(0x5a, 0xc1, 0xfe), // #5ac1fe
@@ -263,7 +269,7 @@ pub const AYU_DARK: Theme = Theme {
     log_error: Color::Rgb(0xef, 0x71, 0x77),
     log_warn: Color::Rgb(0xfe, 0xb4, 0x54),
     log_debug: Color::Rgb(0x52, 0x51, 0x4f),
-    zebra_bg: Color::Rgb(0x19, 0x1f, 0x2a), // list.even.background
+    zebra_bg: Color::Rgb(0x1c, 0x22, 0x2e), // bg + 15
 
     highlight_bg: Color::Rgb(0x1f, 0x21, 0x27), // #1f2127
 
@@ -285,6 +291,7 @@ pub const AYU_DARK: Theme = Theme {
 pub const GRUVBOX_LIGHT: Theme = Theme {
     name: "Gruvbox Light",
 
+    bg: Color::Rgb(0xfb, 0xf1, 0xc7),     // #fbf1c7 (bg0)
     fg: Color::Rgb(0x3c, 0x38, 0x36),     // #3c3836
     muted: Color::Rgb(0x92, 0x83, 0x74),  // #928374
     accent: Color::Rgb(0xd7, 0x99, 0x21), // #d79921
@@ -305,7 +312,7 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xcc, 0x24, 0x1d),
     log_warn: Color::Rgb(0xb5, 0x76, 0x14),
     log_debug: Color::Rgb(0x92, 0x83, 0x74),
-    zebra_bg: Color::Rgb(0xf9, 0xec, 0xba), // list.even.background
+    zebra_bg: Color::Rgb(0xed, 0xe3, 0xb6), // bg - 14
 
     highlight_bg: Color::Rgb(0xeb, 0xdb, 0xb2), // #ebdbb2
 
@@ -327,6 +334,7 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
 pub const AYU_LIGHT: Theme = Theme {
     name: "Ayu Light",
 
+    bg: Color::Rgb(0xfc, 0xfc, 0xfc),     // #FCFCFC
     fg: Color::Rgb(0x5c, 0x61, 0x66),     // #5c6166
     muted: Color::Rgb(0x99, 0xa0, 0xa6),  // #99a0a6
     accent: Color::Rgb(0x55, 0xb4, 0xd3), // #55b4d3
@@ -347,7 +355,7 @@ pub const AYU_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xf0, 0x71, 0x71),
     log_warn: Color::Rgb(0xf1, 0xad, 0x49),
     log_debug: Color::Rgb(0x99, 0xa0, 0xa6),
-    zebra_bg: Color::Rgb(0xe6, 0xe6, 0xe6), // list.even.background
+    zebra_bg: Color::Rgb(0xea, 0xea, 0xea), // bg - 18
 
     highlight_bg: Color::Rgb(0xec, 0xec, 0xed), // #ECECED
 
@@ -369,6 +377,7 @@ pub const AYU_LIGHT: Theme = Theme {
 pub const FLEXOKI_LIGHT: Theme = Theme {
     name: "Flexoki Light",
 
+    bg: Color::Rgb(0xff, 0xfc, 0xf0),     // #FFFCF0
     fg: Color::Rgb(0x10, 0x0f, 0x0f),     // #100F0F
     muted: Color::Rgb(0x6f, 0x6e, 0x69),  // #6F6E69
     accent: Color::Rgb(0x3a, 0xa9, 0x9f), // #3AA99F (cyan)
@@ -389,7 +398,7 @@ pub const FLEXOKI_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xd1, 0x4d, 0x41),
     log_warn: Color::Rgb(0xa0, 0x7c, 0x10),
     log_debug: Color::Rgb(0x6f, 0x6e, 0x69),
-    zebra_bg: Color::Rgb(0xf2, 0xf0, 0xe5), // list.even.background
+    zebra_bg: Color::Rgb(0xee, 0xeb, 0xdf), // bg - 17
 
     highlight_bg: Color::Rgb(0xf2, 0xf0, 0xe5), // muted.background
 
@@ -411,6 +420,7 @@ pub const FLEXOKI_LIGHT: Theme = Theme {
 pub const SOLARIZED_LIGHT: Theme = Theme {
     name: "Solarized Light",
 
+    bg: Color::Rgb(0xfd, 0xf6, 0xe3),     // #FDF6E3 (base3)
     fg: Color::Rgb(0x58, 0x6e, 0x75),     // #586E75 (base0)
     muted: Color::Rgb(0x93, 0xa1, 0xa1),  // #93A1A1 (base1)
     accent: Color::Rgb(0x26, 0x8b, 0xd2), // #268BD2 (blue)
@@ -431,7 +441,7 @@ pub const SOLARIZED_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xdc, 0x32, 0x2f),
     log_warn: Color::Rgb(0xb5, 0x89, 0x00),
     log_debug: Color::Rgb(0x93, 0xa1, 0xa1),
-    zebra_bg: Color::Rgb(0xee, 0xe8, 0xd5), // #EEE8D5
+    zebra_bg: Color::Rgb(0xeb, 0xe4, 0xd0), // bg - 18
 
     highlight_bg: Color::Rgb(0xee, 0xe8, 0xd5),
 
@@ -453,6 +463,7 @@ pub const SOLARIZED_LIGHT: Theme = Theme {
 pub const GHOST_DARK: Theme = Theme {
     name: "Ghost Dark",
 
+    bg: Color::Rgb(0x0a, 0x0e, 0x14),     // #0a0e14
     fg: Color::Rgb(0xb3, 0xe5, 0xfc),     // #b3e5fc
     muted: Color::Rgb(0x6b, 0x8e, 0x9e),  // #6b8e9e
     accent: Color::Rgb(0x00, 0xff, 0x9f), // #00ff9f (cyberpunk green)
@@ -473,7 +484,7 @@ pub const GHOST_DARK: Theme = Theme {
     log_error: Color::Rgb(0xff, 0x00, 0x66),
     log_warn: Color::Rgb(0xff, 0xa7, 0x26),
     log_debug: Color::Rgb(0x6b, 0x8e, 0x9e),
-    zebra_bg: Color::Rgb(0x0d, 0x11, 0x17), // #0d1117
+    zebra_bg: Color::Rgb(0x16, 0x1c, 0x26), // bg + 12
 
     highlight_bg: Color::Rgb(0x0d, 0x11, 0x17),
 
@@ -495,6 +506,7 @@ pub const GHOST_DARK: Theme = Theme {
 pub const GHOST_LIGHT: Theme = Theme {
     name: "Ghost Light",
 
+    bg: Color::Rgb(0xf0, 0xf4, 0xf8),     // #f0f4f8
     fg: Color::Rgb(0x0a, 0x19, 0x29),     // #0a1929
     muted: Color::Rgb(0x5a, 0x6f, 0x84),  // #5a6f84
     accent: Color::Rgb(0x00, 0x85, 0x77), // #008577
@@ -515,7 +527,7 @@ pub const GHOST_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xd3, 0x2f, 0x2f),
     log_warn: Color::Rgb(0xe6, 0x77, 0x00),
     log_debug: Color::Rgb(0x5a, 0x6f, 0x84),
-    zebra_bg: Color::Rgb(0xe6, 0xee, 0xf5), // #e6eef5
+    zebra_bg: Color::Rgb(0xdf, 0xe3, 0xe8), // bg - 17
 
     highlight_bg: Color::Rgb(0xe6, 0xee, 0xf5),
 
@@ -537,6 +549,7 @@ pub const GHOST_LIGHT: Theme = Theme {
 pub const HIGH_CONTRAST: Theme = Theme {
     name: "High Contrast",
 
+    bg: Color::Rgb(0x00, 0x00, 0x00), // pure black
     fg: Color::White,
     muted: Color::Rgb(0xaa, 0xaa, 0xaa), // #AAAAAA
     accent: Color::Cyan,                 // #00FFFF
@@ -557,7 +570,7 @@ pub const HIGH_CONTRAST: Theme = Theme {
     log_error: Color::Red,
     log_warn: Color::Yellow,
     log_debug: Color::Rgb(0xaa, 0xaa, 0xaa),
-    zebra_bg: Color::Rgb(0x1a, 0x1a, 0x1a), // slight gray on pure black
+    zebra_bg: Color::Rgb(0x22, 0x22, 0x22), // bg + 34
 
     highlight_bg: Color::Rgb(0x33, 0x33, 0x33), // #333333
 
@@ -579,6 +592,7 @@ pub const HIGH_CONTRAST: Theme = Theme {
 pub const PASTEL_WAVES_DARK: Theme = Theme {
     name: "Pastel Waves Dark",
 
+    bg: Color::Rgb(0x0d, 0x16, 0x20),     // #0d1620
     fg: Color::Rgb(0xc5, 0xd9, 0xe8),     // #c5d9e8
     muted: Color::Rgb(0x6b, 0x7e, 0x99),  // #6b7e99
     accent: Color::Rgb(0x6b, 0x9b, 0xc0), // #6b9bc0
@@ -599,7 +613,7 @@ pub const PASTEL_WAVES_DARK: Theme = Theme {
     log_error: Color::Rgb(0xf5, 0xa9, 0xa4),
     log_warn: Color::Rgb(0xff, 0xe5, 0xa5),
     log_debug: Color::Rgb(0x6b, 0x7e, 0x99),
-    zebra_bg: Color::Rgb(0x15, 0x24, 0x33), // #152433
+    zebra_bg: Color::Rgb(0x1c, 0x2a, 0x38), // bg + 15
 
     highlight_bg: Color::Rgb(0x1a, 0x2a, 0x3a), // muted.background
 
@@ -621,6 +635,7 @@ pub const PASTEL_WAVES_DARK: Theme = Theme {
 pub const PASTEL_WAVES_LIGHT: Theme = Theme {
     name: "Pastel Waves Light",
 
+    bg: Color::Rgb(0xf5, 0xf6, 0xf1),     // #f5f6f1
     fg: Color::Rgb(0x2c, 0x5e, 0x79),     // #2c5e79
     muted: Color::Rgb(0x8b, 0xa5, 0xb8),  // #8ba5b8
     accent: Color::Rgb(0x6b, 0x9b, 0xc0), // #6b9bc0
@@ -641,7 +656,7 @@ pub const PASTEL_WAVES_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xe5, 0x73, 0x73),
     log_warn: Color::Rgb(0xff, 0xd5, 0x4f),
     log_debug: Color::Rgb(0x8b, 0xa5, 0xb8),
-    zebra_bg: Color::Rgb(0xe8, 0xef, 0xf2), // #e8eff2
+    zebra_bg: Color::Rgb(0xe3, 0xe5, 0xdf), // bg - 18
 
     highlight_bg: Color::Rgb(0xe8, 0xef, 0xf2),
 
@@ -663,6 +678,7 @@ pub const PASTEL_WAVES_LIGHT: Theme = Theme {
 pub const ZOEGI_DARK: Theme = Theme {
     name: "Zoegi Dark",
 
+    bg: Color::Rgb(0x2b, 0x2b, 0x2b),     // #2b2b2b
     fg: Color::Rgb(0xdd, 0xdd, 0xdd),     // #dddddd
     muted: Color::Rgb(0x99, 0x99, 0x99),  // #999999
     accent: Color::Rgb(0x66, 0xb3, 0x95), // #66b395
@@ -683,7 +699,7 @@ pub const ZOEGI_DARK: Theme = Theme {
     log_error: Color::Rgb(0xd0, 0x74, 0x68),
     log_warn: Color::Rgb(0xe7, 0xd3, 0x8f),
     log_debug: Color::Rgb(0x99, 0x99, 0x99),
-    zebra_bg: Color::Rgb(0x26, 0x26, 0x26), // #262626
+    zebra_bg: Color::Rgb(0x3a, 0x3a, 0x3a), // bg + 15
 
     highlight_bg: Color::Rgb(0x26, 0x26, 0x26),
 
@@ -705,6 +721,7 @@ pub const ZOEGI_DARK: Theme = Theme {
 pub const ZOEGI_LIGHT: Theme = Theme {
     name: "Zoegi Light",
 
+    bg: Color::Rgb(0xff, 0xff, 0xff),     // #ffffff
     fg: Color::Rgb(0x33, 0x33, 0x33),     // #333333
     muted: Color::Rgb(0x59, 0x59, 0x59),  // #595959
     accent: Color::Rgb(0x37, 0x79, 0x61), // #377961
@@ -725,7 +742,7 @@ pub const ZOEGI_LIGHT: Theme = Theme {
     log_error: Color::Rgb(0xcc, 0x5c, 0x5c),
     log_warn: Color::Rgb(0xbf, 0x93, 0x40),
     log_debug: Color::Rgb(0x59, 0x59, 0x59),
-    zebra_bg: Color::Rgb(0xf3, 0xf3, 0xf3), // secondary.background
+    zebra_bg: Color::Rgb(0xec, 0xec, 0xec), // bg - 19
 
     highlight_bg: Color::Rgb(0xeb, 0xeb, 0xeb), // list.active.background
 

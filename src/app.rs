@@ -313,6 +313,12 @@ impl App {
                         Some(event) => app.handle_app_event(event),
                         None => break,
                     }
+                    // Drain all remaining queued events before re-rendering.
+                    // Without this, high-volume log streams fall behind because
+                    // only one event is processed per render frame.
+                    while let Ok(event) = rx.try_recv() {
+                        app.handle_app_event(event);
+                    }
                 }
                 _ = tokio::time::sleep(Duration::from_millis(250)) => {
                     // tick -- triggers re-render

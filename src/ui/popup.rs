@@ -64,6 +64,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let theme = app.theme();
     let popup_border = theme.popup_border;
     let popup_fg = theme.popup_fg;
+    let popup_bg = theme.bg;
     let highlight_bg = theme.highlight_bg;
     let namespace_fg = theme.namespace_fg;
     let context_fg = theme.context_fg;
@@ -128,7 +129,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
                 Block::default()
                     .title(title)
                     .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
-                    .border_style(Style::default().fg(popup_border)),
+                    .border_style(Style::default().fg(popup_border))
+                    .style(Style::default().bg(popup_bg)),
             )
             .highlight_style(
                 Style::default()
@@ -141,7 +143,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         // Filename preview footer
         let preview_block = Block::default()
             .borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)
-            .border_style(Style::default().fg(popup_border));
+            .border_style(Style::default().fg(popup_border))
+            .style(Style::default().bg(popup_bg));
         let preview_paragraph = Paragraph::new(vec![
             Line::from(vec![
                 Span::styled(" File: ", Style::default().fg(muted)),
@@ -164,7 +167,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(popup_border)),
+                .border_style(Style::default().fg(popup_border))
+                .style(Style::default().bg(popup_bg)),
         )
         .highlight_style(
             Style::default()

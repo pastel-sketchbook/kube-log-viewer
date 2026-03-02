@@ -13,6 +13,14 @@ use crate::app::App;
 
 /// Top-level render function -- draws the full UI for one frame.
 pub fn render(frame: &mut Frame, app: &mut App) {
+    // Paint the entire screen with the theme's own background color so that
+    // no terminal-default background leaks through (important for light themes).
+    let bg = app.theme().bg;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(bg)),
+        frame.area(),
+    );
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -62,6 +70,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         .title(" Help ")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.popup_border))
+        .style(Style::default().bg(theme.bg))
         .padding(Padding::horizontal(2));
     let inner = block.inner(area);
     frame.render_widget(block, area);

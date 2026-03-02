@@ -233,6 +233,9 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
+    // Available text width inside the bordered block.
+    let text_width = area.width.saturating_sub(2) as usize;
+
     let visible_lines: Vec<Line> = formatted
         .iter()
         .enumerate()
@@ -266,6 +269,13 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
             };
             spans.extend(line_spans);
 
+            // Pad to full row width so the zebra/even-row bg covers the
+            // entire row, not just the text content.
+            let content_width: usize = spans.iter().map(|sp| sp.width()).sum();
+            if content_width < text_width {
+                spans.push(Span::raw(" ".repeat(text_width - content_width)));
+            }
+
             let mut styled = Line::from(spans);
             if i % 2 == 1 {
                 styled = styled.style(Style::default().bg(theme.zebra_bg));
@@ -273,6 +283,26 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
             styled
         })
         .collect();
+
+    // When wrapping is on, logical lines expand to multiple visual lines.
+    // Calculate the overflow so we can scroll the Paragraph to keep the
+    // bottom (most recent) lines visible instead of clipping them.
+    let wrap_scroll_y = if app.wrap_lines {
+        if text_width > 0 {
+            let total_visual: usize = visible_lines
+                .iter()
+                .map(|l| {
+                    let w = l.width();
+                    if w == 0 { 1 } else { w.div_ceil(text_width) }
+                })
+                .sum();
+            total_visual.saturating_sub(inner_height) as u16
+        } else {
+            0
+        }
+    } else {
+        0
+    };
 
     let block = Block::default()
         .title(Line::from(title_spans))
@@ -283,6 +313,9 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
 
     if app.wrap_lines {
         paragraph = paragraph.wrap(Wrap { trim: false });
+        if wrap_scroll_y > 0 {
+            paragraph = paragraph.scroll((wrap_scroll_y, 0));
+        }
     }
 
     frame.render_widget(paragraph, area);
@@ -382,22 +415,56 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
         })
         .collect();
 
+    // Available text width inside the bordered block.
+    let text_width = area.width.saturating_sub(2) as usize;
+
     let visible_lines: Vec<Line> = formatted
         .iter()
         .enumerate()
         .map(|(i, line)| {
             let s: &str = line.as_ref();
-            let mut styled = if !app.search_query.is_empty() && is_active {
-                highlight_search(s, &app.search_query, theme, app.timestamp_mode)
+            let mut spans: Vec<Span> = if !app.search_query.is_empty() && is_active {
+                highlight_search(s, &app.search_query, theme, app.timestamp_mode).spans
             } else {
-                Line::from(colorize_log_line(s, theme, app.timestamp_mode))
+                colorize_log_line(s, theme, app.timestamp_mode)
+                    .into_iter()
+                    .map(|sp| Span::from(sp.content.into_owned()).style(sp.style))
+                    .collect()
             };
+
+            // Pad to full row width so the zebra/even-row bg covers the
+            // entire row, not just the text content.
+            let content_width: usize = spans.iter().map(|sp| sp.width()).sum();
+            if content_width < text_width {
+                spans.push(Span::raw(" ".repeat(text_width - content_width)));
+            }
+
+            let mut styled = Line::from(spans);
             if i % 2 == 1 {
                 styled = styled.style(Style::default().bg(theme.zebra_bg));
             }
             styled
         })
         .collect();
+
+    // Same wrap-scroll adjustment as render_single_or_merged: keep bottom
+    // lines visible when wrapping causes visual overflow.
+    let wrap_scroll_y = if app.wrap_lines {
+        if text_width > 0 {
+            let total_visual: usize = visible_lines
+                .iter()
+                .map(|l| {
+                    let w = l.width();
+                    if w == 0 { 1 } else { w.div_ceil(text_width) }
+                })
+                .sum();
+            total_visual.saturating_sub(inner_height) as u16
+        } else {
+            0
+        }
+    } else {
+        0
+    };
 
     let block = Block::default()
         .title(Line::from(title_spans))
@@ -408,6 +475,9 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
 
     if app.wrap_lines {
         paragraph = paragraph.wrap(Wrap { trim: false });
+        if wrap_scroll_y > 0 {
+            paragraph = paragraph.scroll((wrap_scroll_y, 0));
+        }
     }
 
     frame.render_widget(paragraph, area);
