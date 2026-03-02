@@ -100,6 +100,7 @@ fn render_help(frame: &mut Frame, app: &App) {
         "  w          Toggle wide log view",
         "  W          Toggle line wrap",
         "  J          Toggle JSON formatting",
+        "  H          Toggle health-check filter",
         "  T          Cycle timestamp mode",
         "  R          Set time range filter",
         "  t          Cycle theme",

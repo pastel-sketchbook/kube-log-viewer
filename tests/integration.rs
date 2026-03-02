@@ -356,13 +356,18 @@ fn test_follow_mode_tracks_new_lines() {
     app.focus = Focus::Logs;
     assert!(app.follow_mode);
 
-    // Receive lines -- offset should track latest
+    // Receive lines -- follow mode stays true (scroll offset is
+    // computed at render time, not per-event, to avoid O(n²)).
     for i in 0..50 {
         app.handle_app_event(AppEvent::LogLine(String::new(), format!("line {i}")));
     }
+    assert!(app.follow_mode);
+    assert_eq!(app.log_lines.len(), 50);
 
+    // Use G to set offset to end-of-log (simulates what render would do)
+    app.handle_key(key(KeyCode::Char('G')));
+    assert!(app.follow_mode);
     let offset_after_follow = app.log_scroll_offset;
-    assert!(offset_after_follow > 0);
 
     // Scroll up disables follow
     app.handle_key(key(KeyCode::Char('k')));

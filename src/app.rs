@@ -201,6 +201,7 @@ pub struct App {
     pub json_mode: bool,
     pub timestamp_mode: TimestampMode,
     pub time_range: TimeRange,
+    pub hide_health_checks: bool,
     pub input_mode: InputMode,
     pub search_query: String,
     pub show_help: bool,
@@ -256,6 +257,7 @@ impl App {
             json_mode: true,
             timestamp_mode: TimestampMode::default(),
             time_range: TimeRange::default(),
+            hide_health_checks: true,
             input_mode: InputMode::Normal,
             search_query: String::new(),
             show_help: false,
@@ -378,6 +380,7 @@ impl App {
             KeyCode::Char('w') => self.wide_logs = !self.wide_logs,
             KeyCode::Char('W') => self.wrap_lines = !self.wrap_lines,
             KeyCode::Char('J') => self.json_mode = !self.json_mode,
+            KeyCode::Char('H') => self.hide_health_checks = !self.hide_health_checks,
             KeyCode::Char('T') => self.timestamp_mode = self.timestamp_mode.cycle(),
             KeyCode::Char('R') => self.open_popup(PopupKind::TimeRange),
             KeyCode::Char('t') => self.cycle_theme(),
@@ -783,9 +786,12 @@ impl App {
             }
             AppEvent::LogLine(source, line) => {
                 self.log_lines.push(TaggedLine { source, line });
-                if self.follow_mode {
-                    self.log_scroll_offset = self.filtered_log_lines().len().saturating_sub(1);
-                }
+                // Note: no scroll offset update here — the render path
+                // computes the correct offset when follow_mode is true
+                // (total_lines - inner_height).  Calling filtered_log_lines()
+                // on every append was O(n²) and caused multi-minute hangs at
+                // 60 k lines.
+
                 // Cap log lines to prevent unbounded memory growth
                 if self.log_lines.len() > 50_000 {
                     debug!("log line cap reached, draining oldest 10,000 lines");
@@ -863,6 +869,14 @@ impl App {
         self.log_lines
             .iter()
             .filter(|tl| {
+                // Health check filter: hide lines containing both
+                // "health" and "kube-probe" (case-insensitive).
+                if self.hide_health_checks {
+                    let lower = tl.line.to_lowercase();
+                    if lower.contains("health") && lower.contains("kube-probe") {
+                        return false;
+                    }
+                }
                 // Search filter
                 if let Some(ref lower) = search_lower
                     && !tl.line.to_lowercase().contains(lower)
@@ -2709,5 +2723,92 @@ mod tests {
         assert_eq!(app.log_lines.len(), 1);
         assert!(app.log_lines[0].line.contains("[INFO] Exported to"));
         assert!(app.log_lines[0].line.contains("/tmp/test.log"));
+    }
+
+    // -- Health check filter ------------------------------------------------
+
+    #[test]
+    fn test_shift_h_toggles_hide_health_checks() {
+        let mut app = test_app();
+        assert!(app.hide_health_checks); // default: hidden
+        app.handle_key(key(KeyCode::Char('H')));
+        assert!(!app.hide_health_checks);
+        app.handle_key(key(KeyCode::Char('H')));
+        assert!(app.hide_health_checks);
+    }
+
+    #[test]
+    fn test_health_filter_hides_lines_with_both_keywords() {
+        let mut app = test_app();
+        app.hide_health_checks = true;
+        app.log_lines = vec![
+            tl("GET /health uri=/miapi/isHealthy user_agent=kube-probe/1.32"),
+            tl("INFO: request processed"),
+            tl("GET /status user_agent=kube-probe/1.32 health=ok"),
+        ];
+        let filtered = app.filtered_log_lines();
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(lines, vec!["INFO: request processed"]);
+    }
+
+    #[test]
+    fn test_health_filter_keeps_lines_with_only_one_keyword() {
+        let mut app = test_app();
+        app.hide_health_checks = true;
+        app.log_lines = vec![
+            tl("GET /health check passed"),            // only "health"
+            tl("user_agent=kube-probe/1.32 GET /api"), // only "kube-probe"
+            tl("INFO: all good"),                      // neither
+        ];
+        let filtered = app.filtered_log_lines();
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "GET /health check passed",
+                "user_agent=kube-probe/1.32 GET /api",
+                "INFO: all good",
+            ]
+        );
+    }
+
+    #[test]
+    fn test_health_filter_case_insensitive() {
+        let mut app = test_app();
+        app.hide_health_checks = true;
+        app.log_lines = vec![
+            tl("isHealthy kube-probe/1.32"),    // mixed case "Health"
+            tl("HEALTH CHECK Kube-Probe/1.32"), // upper case both
+            tl("health KUBE-PROBE"),            // lower + upper
+        ];
+        let filtered = app.filtered_log_lines();
+        assert!(filtered.is_empty(), "all lines should be hidden");
+    }
+
+    #[test]
+    fn test_health_filter_disabled_shows_all() {
+        let mut app = test_app();
+        app.hide_health_checks = false;
+        app.log_lines = vec![
+            tl("GET /health uri=/miapi/isHealthy user_agent=kube-probe/1.32"),
+            tl("INFO: request processed"),
+        ];
+        let filtered = app.filtered_log_lines();
+        assert_eq!(filtered.len(), 2, "disabled filter should show all lines");
+    }
+
+    #[test]
+    fn test_health_filter_works_with_search() {
+        let mut app = test_app();
+        app.hide_health_checks = true;
+        app.search_query = "GET".to_string();
+        app.log_lines = vec![
+            tl("GET /health user_agent=kube-probe/1.32"), // health + kube-probe -> hidden
+            tl("GET /api/users"),                         // matches search, not health
+            tl("POST /api/data"),                         // no match for search
+        ];
+        let filtered = app.filtered_log_lines();
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(lines, vec!["GET /api/users"]);
     }
 }

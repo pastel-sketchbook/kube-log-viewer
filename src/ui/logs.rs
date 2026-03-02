@@ -198,7 +198,6 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme.search_fg),
         ));
     }
-
     let filtered_lines = app.filtered_log_lines();
     let total_lines = filtered_lines.len();
 
@@ -388,7 +387,6 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
             Style::default().fg(theme.search_fg),
         ));
     }
-
     let filtered_lines = app.filtered_log_lines_for_pane(pane_idx);
     let total_lines = filtered_lines.len();
 

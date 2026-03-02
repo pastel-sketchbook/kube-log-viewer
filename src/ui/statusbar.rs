@@ -49,13 +49,21 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    // Right-align [Theme Name]
+    // Right-align indicators + [Theme Name]
+    let health_tag = if app.hide_health_checks {
+        "[HEALTH HIDDEN] "
+    } else {
+        ""
+    };
     let theme_tag = format!("[{}] ", theme.name);
     let left_width: usize = spans.iter().map(|s| s.content.len()).sum();
-    let right_width = theme_tag.len();
+    let right_width = health_tag.len() + theme_tag.len();
     let padding = (area.width as usize).saturating_sub(left_width + right_width);
     if padding > 0 {
         spans.push(Span::raw(" ".repeat(padding)));
+    }
+    if !health_tag.is_empty() {
+        spans.push(Span::styled(health_tag, Style::default().fg(theme.accent)));
     }
     spans.push(Span::styled(theme_tag, label));
 
