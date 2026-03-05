@@ -237,8 +237,7 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
 
     let visible_lines: Vec<Line> = formatted
         .iter()
-        .enumerate()
-        .map(|(i, (source, line))| {
+        .map(|(source, line)| {
             let s: &str = line.as_ref();
             let mut spans: Vec<Span> = Vec::new();
 
@@ -274,18 +273,7 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
             };
             spans.extend(line_spans);
 
-            // Pad to full row width so the zebra/even-row bg covers the
-            // entire row, not just the text content.
-            let content_width: usize = spans.iter().map(|sp| sp.width()).sum();
-            if content_width < text_width {
-                spans.push(Span::raw(" ".repeat(text_width - content_width)));
-            }
-
-            let mut styled = Line::from(spans);
-            if i % 2 == 1 {
-                styled = styled.style(Style::default().bg(theme.zebra_bg));
-            }
-            styled
+            Line::from(spans)
         })
         .collect();
 
@@ -311,6 +299,11 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
         0
     };
 
+    // Build a map of visual row -> is_zebra before rendering.
+    // We apply zebra bg directly to the buffer after rendering so it
+    // covers the full row width regardless of wrapping.
+    let zebra_rows = compute_zebra_rows(&visible_lines, text_width, app.wrap_lines, wrap_scroll_y);
+
     let block = Block::default()
         .title(Line::from(title_spans))
         .borders(Borders::ALL)
@@ -326,6 +319,9 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
     }
 
     frame.render_widget(paragraph, area);
+
+    // Paint zebra background on the buffer for full-width striping.
+    apply_zebra_to_buffer(frame, area, &zebra_rows, theme.zebra_bg);
 
     // Render search input bar when in search mode
     if app.input_mode == InputMode::Search {
@@ -429,10 +425,9 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
 
     let visible_lines: Vec<Line> = formatted
         .iter()
-        .enumerate()
-        .map(|(i, line)| {
+        .map(|line| {
             let s: &str = line.as_ref();
-            let mut spans: Vec<Span> = if !app.search_query.is_empty() && is_active {
+            let spans: Vec<Span> = if !app.search_query.is_empty() && is_active {
                 highlight_search(s, &app.search_query, theme, app.timestamp_mode).spans
             } else {
                 colorize_log_line(s, theme, app.timestamp_mode)
@@ -441,18 +436,7 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
                     .collect()
             };
 
-            // Pad to full row width so the zebra/even-row bg covers the
-            // entire row, not just the text content.
-            let content_width: usize = spans.iter().map(|sp| sp.width()).sum();
-            if content_width < text_width {
-                spans.push(Span::raw(" ".repeat(text_width - content_width)));
-            }
-
-            let mut styled = Line::from(spans);
-            if i % 2 == 1 {
-                styled = styled.style(Style::default().bg(theme.zebra_bg));
-            }
-            styled
+            Line::from(spans)
         })
         .collect();
 
@@ -477,6 +461,8 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
         0
     };
 
+    let zebra_rows = compute_zebra_rows(&visible_lines, text_width, app.wrap_lines, wrap_scroll_y);
+
     let block = Block::default()
         .title(Line::from(title_spans))
         .borders(Borders::ALL)
@@ -493,9 +479,53 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
 
     frame.render_widget(paragraph, area);
 
+    apply_zebra_to_buffer(frame, area, &zebra_rows, theme.zebra_bg);
+
     // Render search input in the active pane only
     if is_active && app.input_mode == InputMode::Search {
         render_search_input(frame, app, area);
+    }
+}
+
+/// Compute which visual rows should have the zebra background.
+/// Returns a Vec<bool> indexed by visual row within the inner area.
+fn compute_zebra_rows(lines: &[Line], text_width: usize, wrap: bool, scroll_y: u16) -> Vec<bool> {
+    let mut rows = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let is_zebra = i % 2 == 1;
+        let visual_count = if wrap && text_width > 0 {
+            let w = line.width();
+            if w == 0 { 1 } else { w.div_ceil(text_width) }
+        } else {
+            1
+        };
+        for _ in 0..visual_count {
+            rows.push(is_zebra);
+        }
+    }
+    // When scrolled (wrap overflow), skip the first `scroll_y` visual rows.
+    if scroll_y > 0 {
+        rows.drain(..rows.len().min(scroll_y as usize));
+    }
+    rows
+}
+
+/// Paint zebra background directly on the frame buffer so it covers
+/// the full row width, independent of Paragraph rendering.
+fn apply_zebra_to_buffer(frame: &mut Frame, area: Rect, zebra_rows: &[bool], zebra_bg: Color) {
+    // Inner area = area minus 1-cell border on each side.
+    let inner_x = area.x + 1;
+    let inner_y = area.y + 1;
+    let inner_w = area.width.saturating_sub(2);
+    let inner_h = area.height.saturating_sub(2);
+    let buf = frame.buffer_mut();
+    for row in 0..inner_h {
+        if let Some(&true) = zebra_rows.get(row as usize) {
+            for col in 0..inner_w {
+                let cell = &mut buf[(inner_x + col, inner_y + row)];
+                cell.set_bg(zebra_bg);
+            }
+        }
     }
 }
 
@@ -613,8 +643,8 @@ fn colorize_log_line<'a>(
         let ts = &line[..m.end()];
         let rest = &line[m.end()..];
         let ts_span = match convert_timestamp(ts, timestamp_mode) {
-            Some(converted) => Span::styled(converted, Style::default().fg(theme.muted)),
-            None => Span::styled(ts, Style::default().fg(theme.muted)),
+            Some(converted) => Span::styled(converted, Style::default().fg(theme.log_timestamp)),
+            None => Span::styled(ts, Style::default().fg(theme.log_timestamp)),
         };
         let rest_span = match level_color {
             Some(color) => Span::styled(rest, Style::default().fg(color)),
@@ -635,24 +665,29 @@ fn highlight_search(
     theme: &Theme,
     timestamp_mode: TimestampMode,
 ) -> Line<'static> {
-    // Apply timestamp conversion so search operates on what the user sees
-    let display: String = match TIMESTAMP_RE.find(line) {
+    // Apply timestamp conversion so search operates on what the user sees.
+    // Also track where the timestamp ends so we can style it.
+    let (display, ts_end): (String, usize) = match TIMESTAMP_RE.find(line) {
         Some(m) => match convert_timestamp(&line[..m.end()], timestamp_mode) {
-            Some(converted) => format!("{}{}", converted, &line[m.end()..]),
-            None => line.to_string(),
+            Some(converted) => {
+                let clen = converted.len();
+                (format!("{}{}", converted, &line[m.end()..]), clen)
+            }
+            None => (line.to_string(), m.end()),
         },
-        None => line.to_string(),
+        None => (line.to_string(), 0),
     };
 
     let lower_line = display.to_lowercase();
     let lower_query = query.to_lowercase();
 
+    let ts_style = Style::default().fg(theme.log_timestamp);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut last_end = 0;
 
     for (start, _) in lower_line.match_indices(&lower_query) {
         if start > last_end {
-            spans.push(Span::raw(display[last_end..start].to_string()));
+            push_non_match_spans(&mut spans, &display, last_end, start, ts_end, ts_style);
         }
         let end = start + query.len();
         spans.push(Span::styled(
@@ -665,10 +700,49 @@ fn highlight_search(
     }
 
     if last_end < display.len() {
-        spans.push(Span::raw(display[last_end..].to_string()));
+        push_non_match_spans(
+            &mut spans,
+            &display,
+            last_end,
+            display.len(),
+            ts_end,
+            ts_style,
+        );
     }
 
     Line::from(spans)
+}
+
+/// Push non-match segments into `spans`, applying timestamp styling to the
+/// portion that falls within `[0..ts_end)`.
+fn push_non_match_spans(
+    spans: &mut Vec<Span<'static>>,
+    display: &str,
+    seg_start: usize,
+    seg_end: usize,
+    ts_end: usize,
+    ts_style: Style,
+) {
+    if seg_start >= seg_end {
+        return;
+    }
+    if ts_end == 0 || seg_start >= ts_end {
+        // Entirely past the timestamp
+        spans.push(Span::raw(display[seg_start..seg_end].to_string()));
+    } else if seg_end <= ts_end {
+        // Entirely within the timestamp
+        spans.push(Span::styled(
+            display[seg_start..seg_end].to_string(),
+            ts_style,
+        ));
+    } else {
+        // Straddles the boundary
+        spans.push(Span::styled(
+            display[seg_start..ts_end].to_string(),
+            ts_style,
+        ));
+        spans.push(Span::raw(display[ts_end..seg_end].to_string()));
+    }
 }
 
 #[cfg(test)]
@@ -687,8 +761,8 @@ mod tests {
             TimestampMode::Utc,
         );
         assert_eq!(spans.len(), 2);
-        // Timestamp in muted
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        // Timestamp in log_timestamp color
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
         // Rest in error color
         assert_eq!(spans[1].style.fg, Some(DARK.log_error));
         assert!(spans[1].content.contains("ERROR"));
@@ -702,7 +776,7 @@ mod tests {
             TimestampMode::Utc,
         );
         assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
         assert_eq!(spans[1].style.fg, Some(DARK.log_warn));
     }
 
@@ -740,7 +814,7 @@ mod tests {
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15T10:00:00Z ");
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
         // "INFO started" — no level keyword match (INFO not handled as special)
         assert_eq!(spans[1].style.fg, None);
     }
@@ -754,7 +828,7 @@ mod tests {
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15T10:00:00.123456789Z ");
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
         assert_eq!(spans[1].style.fg, Some(DARK.log_error));
     }
 
@@ -767,7 +841,7 @@ mod tests {
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15 10:00:00 ");
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
     }
 
     #[test]
@@ -779,7 +853,7 @@ mod tests {
         );
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].content, "2024-01-15T10:00:00+05:30 ");
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
         assert_eq!(spans[1].style.fg, Some(DARK.log_warn));
     }
 
@@ -1166,7 +1240,7 @@ mod tests {
         assert_eq!(spans.len(), 2);
         // Timestamp should be converted (owned String, not the original)
         assert!(spans[0].content.contains("2026-02-2"));
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
     }
 
     #[test]
@@ -1178,7 +1252,7 @@ mod tests {
         );
         assert_eq!(spans.len(), 2);
         assert!(spans[0].content.contains("ago"));
-        assert_eq!(spans[0].style.fg, Some(DARK.muted));
+        assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
     }
 
     #[test]

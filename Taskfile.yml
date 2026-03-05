@@ -1,6 +1,11 @@
 version: "3"
 
 tasks:
+  default:
+    desc: "List all available tasks"
+    cmds:
+      - task --list-all
+
   # --- Core Development ---
   fmt:
     desc: "Format all Rust code"

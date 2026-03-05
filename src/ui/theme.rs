@@ -28,6 +28,7 @@ pub struct Theme {
     pub status_unknown: Color,
 
     // Logs
+    pub log_timestamp: Color,
     pub log_error: Color,
     pub log_warn: Color,
     pub log_debug: Color,
@@ -98,8 +99,9 @@ pub const DARK: Theme = Theme {
 
     log_error: Color::Red,
     log_warn: Color::Yellow,
+    log_timestamp: Color::Rgb(0x6a, 0x9f, 0xb5), // steel blue
     log_debug: Color::DarkGray,
-    zebra_bg: Color::Rgb(38, 38, 38),
+    zebra_bg: Color::Rgb(46, 46, 46), // bg + 30
 
     highlight_bg: Color::DarkGray,
 
@@ -141,8 +143,9 @@ pub const GRUVBOX_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xf0, 0x65, 0x55),
     log_warn: Color::Rgb(0xfa, 0xbd, 0x2f),
+    log_timestamp: Color::Rgb(0x6d, 0x8f, 0x83), // dimmed aqua
     log_debug: Color::Rgb(0x92, 0x83, 0x74),
-    zebra_bg: Color::Rgb(0x30, 0x33, 0x34), // bg0_h + 19
+    zebra_bg: Color::Rgb(0x39, 0x3c, 0x3d), // bg0_h + 28
 
     highlight_bg: Color::Rgb(0x3c, 0x38, 0x36), // #3c3836
 
@@ -184,8 +187,9 @@ pub const SOLARIZED_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xdc, 0x32, 0x2f),
     log_warn: Color::Rgb(0xb5, 0x89, 0x00),
+    log_timestamp: Color::Rgb(0x65, 0x7b, 0x83), // base00
     log_debug: Color::Rgb(0x58, 0x6e, 0x75),
-    zebra_bg: Color::Rgb(0x0b, 0x3a, 0x48), // base02 brightened
+    zebra_bg: Color::Rgb(0x10, 0x41, 0x51), // base02 brightened +
 
     highlight_bg: Color::Rgb(0x07, 0x36, 0x42), // base02
 
@@ -227,8 +231,9 @@ pub const FLEXOKI_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xd1, 0x4d, 0x41),
     log_warn: Color::Rgb(0xd0, 0xa2, 0x15),
-    log_debug: Color::Rgb(0x57, 0x56, 0x53), // #575653
-    zebra_bg: Color::Rgb(0x26, 0x25, 0x24),  // bg + 22
+    log_timestamp: Color::Rgb(0x6f, 0x87, 0x9e), // muted blue
+    log_debug: Color::Rgb(0x57, 0x56, 0x53),     // #575653
+    zebra_bg: Color::Rgb(0x2e, 0x2d, 0x2c),      // bg + 30
 
     highlight_bg: Color::Rgb(0x1c, 0x1b, 0x1a), // #1C1B1A
 
@@ -270,8 +275,9 @@ pub const AYU_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xef, 0x71, 0x77),
     log_warn: Color::Rgb(0xfe, 0xb4, 0x54),
+    log_timestamp: Color::Rgb(0x5a, 0x84, 0xa8), // soft blue
     log_debug: Color::Rgb(0x52, 0x51, 0x4f),
-    zebra_bg: Color::Rgb(0x1c, 0x22, 0x2e), // bg + 15
+    zebra_bg: Color::Rgb(0x23, 0x2b, 0x3a), // bg + 22/27/36
 
     highlight_bg: Color::Rgb(0x1f, 0x21, 0x27), // #1f2127
 
@@ -313,8 +319,9 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xcc, 0x24, 0x1d),
     log_warn: Color::Rgb(0xb5, 0x76, 0x14),
+    log_timestamp: Color::Rgb(0x5f, 0x7e, 0x6e), // olive teal
     log_debug: Color::Rgb(0x92, 0x83, 0x74),
-    zebra_bg: Color::Rgb(0xed, 0xe3, 0xb6), // bg - 14
+    zebra_bg: Color::Rgb(0xe5, 0xdb, 0xad), // bg - 22/22/26
 
     highlight_bg: Color::Rgb(0xeb, 0xdb, 0xb2), // #ebdbb2
 
@@ -356,8 +363,9 @@ pub const AYU_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xf0, 0x71, 0x71),
     log_warn: Color::Rgb(0xf1, 0xad, 0x49),
+    log_timestamp: Color::Rgb(0x73, 0x8c, 0x9c), // medium teal
     log_debug: Color::Rgb(0x99, 0xa0, 0xa6),
-    zebra_bg: Color::Rgb(0xea, 0xea, 0xea), // bg - 18
+    zebra_bg: Color::Rgb(0xe0, 0xe0, 0xe0), // bg - 28
 
     highlight_bg: Color::Rgb(0xec, 0xec, 0xed), // #ECECED
 
@@ -399,8 +407,9 @@ pub const FLEXOKI_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xd1, 0x4d, 0x41),
     log_warn: Color::Rgb(0xa0, 0x7c, 0x10),
+    log_timestamp: Color::Rgb(0x57, 0x6d, 0x80), // dark muted blue
     log_debug: Color::Rgb(0x6f, 0x6e, 0x69),
-    zebra_bg: Color::Rgb(0xee, 0xeb, 0xdf), // bg - 17
+    zebra_bg: Color::Rgb(0xe5, 0xe2, 0xd6), // bg - 26
 
     highlight_bg: Color::Rgb(0xf2, 0xf0, 0xe5), // muted.background
 
@@ -442,8 +451,9 @@ pub const SOLARIZED_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xdc, 0x32, 0x2f),
     log_warn: Color::Rgb(0xb5, 0x89, 0x00),
+    log_timestamp: Color::Rgb(0x65, 0x7b, 0x83), // base00
     log_debug: Color::Rgb(0x93, 0xa1, 0xa1),
-    zebra_bg: Color::Rgb(0xeb, 0xe4, 0xd0), // bg - 18
+    zebra_bg: Color::Rgb(0xe1, 0xda, 0xc6), // bg - 28
 
     highlight_bg: Color::Rgb(0xee, 0xe8, 0xd5),
 
@@ -485,8 +495,9 @@ pub const GHOST_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xff, 0x00, 0x66),
     log_warn: Color::Rgb(0xff, 0xa7, 0x26),
+    log_timestamp: Color::Rgb(0x4a, 0x90, 0xa8), // cyber teal
     log_debug: Color::Rgb(0x6b, 0x8e, 0x9e),
-    zebra_bg: Color::Rgb(0x16, 0x1c, 0x26), // bg + 12
+    zebra_bg: Color::Rgb(0x1c, 0x23, 0x2f), // bg + 18/21/27
 
     highlight_bg: Color::Rgb(0x0d, 0x11, 0x17),
 
@@ -528,8 +539,9 @@ pub const GHOST_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xd3, 0x2f, 0x2f),
     log_warn: Color::Rgb(0xe6, 0x77, 0x00),
+    log_timestamp: Color::Rgb(0x3a, 0x6e, 0x88), // medium teal
     log_debug: Color::Rgb(0x5a, 0x6f, 0x84),
-    zebra_bg: Color::Rgb(0xdf, 0xe3, 0xe8), // bg - 17
+    zebra_bg: Color::Rgb(0xd6, 0xda, 0xe0), // bg - 26
 
     highlight_bg: Color::Rgb(0xe6, 0xee, 0xf5),
 
@@ -571,8 +583,9 @@ pub const HIGH_CONTRAST: Theme = Theme {
 
     log_error: Color::Red,
     log_warn: Color::Yellow,
+    log_timestamp: Color::Rgb(0x6a, 0xb0, 0xd0), // bright blue
     log_debug: Color::Rgb(0xaa, 0xaa, 0xaa),
-    zebra_bg: Color::Rgb(0x22, 0x22, 0x22), // bg + 34
+    zebra_bg: Color::Rgb(0x2a, 0x2a, 0x2a), // bg + 42
 
     highlight_bg: Color::Rgb(0x33, 0x33, 0x33), // #333333
 
@@ -614,8 +627,9 @@ pub const PASTEL_WAVES_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xf5, 0xa9, 0xa4),
     log_warn: Color::Rgb(0xff, 0xe5, 0xa5),
+    log_timestamp: Color::Rgb(0x6b, 0x9b, 0xb8), // dimmed theme blue
     log_debug: Color::Rgb(0x6b, 0x7e, 0x99),
-    zebra_bg: Color::Rgb(0x1c, 0x2a, 0x38), // bg + 15
+    zebra_bg: Color::Rgb(0x23, 0x34, 0x44), // bg + 22/30/36
 
     highlight_bg: Color::Rgb(0x1a, 0x2a, 0x3a), // muted.background
 
@@ -657,8 +671,9 @@ pub const PASTEL_WAVES_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xe5, 0x73, 0x73),
     log_warn: Color::Rgb(0xff, 0xd5, 0x4f),
+    log_timestamp: Color::Rgb(0x4a, 0x7e, 0x95), // dark blue-teal
     log_debug: Color::Rgb(0x8b, 0xa5, 0xb8),
-    zebra_bg: Color::Rgb(0xe3, 0xe5, 0xdf), // bg - 18
+    zebra_bg: Color::Rgb(0xd9, 0xdc, 0xd5), // bg - 28/26/28
 
     highlight_bg: Color::Rgb(0xe8, 0xef, 0xf2),
 
@@ -700,8 +715,9 @@ pub const ZOEGI_DARK: Theme = Theme {
 
     log_error: Color::Rgb(0xd0, 0x74, 0x68),
     log_warn: Color::Rgb(0xe7, 0xd3, 0x8f),
+    log_timestamp: Color::Rgb(0x5a, 0x9a, 0xaa), // muted cyan-blue
     log_debug: Color::Rgb(0x99, 0x99, 0x99),
-    zebra_bg: Color::Rgb(0x3a, 0x3a, 0x3a), // bg + 15
+    zebra_bg: Color::Rgb(0x43, 0x43, 0x43), // bg + 24
 
     highlight_bg: Color::Rgb(0x26, 0x26, 0x26),
 
@@ -743,8 +759,9 @@ pub const ZOEGI_LIGHT: Theme = Theme {
 
     log_error: Color::Rgb(0xcc, 0x5c, 0x5c),
     log_warn: Color::Rgb(0xbf, 0x93, 0x40),
+    log_timestamp: Color::Rgb(0x3d, 0x70, 0x80), // dark teal
     log_debug: Color::Rgb(0x59, 0x59, 0x59),
-    zebra_bg: Color::Rgb(0xec, 0xec, 0xec), // bg - 19
+    zebra_bg: Color::Rgb(0xe3, 0xe3, 0xe3), // bg - 28
 
     highlight_bg: Color::Rgb(0xeb, 0xeb, 0xeb), // list.active.background
 
@@ -784,10 +801,11 @@ pub const FFE_DARK: Theme = Theme {
     status_failed: Color::Rgb(0xff, 0x75, 0x7f),  // #ff757f (error)
     status_unknown: Color::Rgb(0x6c, 0x70, 0x86), // #6c7086 (hidden)
 
-    log_error: Color::Rgb(0xff, 0x75, 0x7f), // #ff757f
-    log_warn: Color::Rgb(0xe5, 0xc0, 0x7b),  // #e5c07b
-    log_debug: Color::Rgb(0x6c, 0x70, 0x86), // #6c7086 (text.placeholder)
-    zebra_bg: Color::Rgb(0x24, 0x2a, 0x33),  // #242a33 (element.background)
+    log_error: Color::Rgb(0xff, 0x75, 0x7f),     // #ff757f
+    log_warn: Color::Rgb(0xe5, 0xc0, 0x7b),      // #e5c07b
+    log_timestamp: Color::Rgb(0x5a, 0xa8, 0xc0), // medium cyan
+    log_debug: Color::Rgb(0x6c, 0x70, 0x86),     // #6c7086 (text.placeholder)
+    zebra_bg: Color::Rgb(0x2a, 0x31, 0x3b),      // bg + 12/14/16
 
     highlight_bg: Color::Rgb(0x3b, 0x42, 0x52), // #3b4252 (element.active)
 
@@ -827,10 +845,11 @@ pub const FFE_LIGHT: Theme = Theme {
     status_failed: Color::Rgb(0xc9, 0x43, 0x4e),  // #c9434e (error)
     status_unknown: Color::Rgb(0x7c, 0x84, 0x96), // #7c8496 (hidden)
 
-    log_error: Color::Rgb(0xc9, 0x43, 0x4e), // #c9434e
-    log_warn: Color::Rgb(0xb8, 0x92, 0x0d),  // #b8920d
-    log_debug: Color::Rgb(0x9b, 0xa2, 0xaf), // #9ba2af (comment)
-    zebra_bg: Color::Rgb(0xdd, 0xe1, 0xe8),  // #dde1e8 (element.hover)
+    log_error: Color::Rgb(0xc9, 0x43, 0x4e),     // #c9434e
+    log_warn: Color::Rgb(0xb8, 0x92, 0x0d),      // #b8920d
+    log_timestamp: Color::Rgb(0x35, 0x7a, 0x8e), // dark teal
+    log_debug: Color::Rgb(0x9b, 0xa2, 0xaf),     // #9ba2af (comment)
+    zebra_bg: Color::Rgb(0xd5, 0xda, 0xe2),      // bg - 24/22/18
 
     highlight_bg: Color::Rgb(0xc9, 0xcd, 0xd6), // #c9cdd6 (element.active)
 
