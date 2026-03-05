@@ -893,11 +893,12 @@ impl App {
             .log_lines
             .iter()
             .filter(|tl| {
-                // Health check filter: hide lines containing both
-                // "health" and "kube-probe" (case-insensitive).
+                // Health check filter: hide lines from Kubernetes probes.
+                // Any request with "kube-probe" user-agent is a K8s
+                // liveness/readiness/startup probe, regardless of path.
                 if self.hide_health_checks {
                     let lower = tl.line.to_lowercase();
-                    if lower.contains("health") && lower.contains("kube-probe") {
+                    if lower.contains("kube-probe") {
                         return false;
                     }
                 }
@@ -2777,12 +2778,13 @@ mod tests {
     }
 
     #[test]
-    fn test_health_filter_hides_lines_with_both_keywords() {
+    fn test_health_filter_hides_kube_probe_lines() {
         let mut app = test_app();
         app.hide_health_checks = true;
         app.log_lines = vec![
             tl("GET /health uri=/miapi/isHealthy user_agent=kube-probe/1.32"),
             tl("INFO: request processed"),
+            tl("GET / HTTP/1.1 200 385 kube-probe/1.31+"), // probe on root path
             tl("GET /status user_agent=kube-probe/1.32 health=ok"),
         ];
         let filtered = app.filtered_log_lines();
@@ -2791,24 +2793,16 @@ mod tests {
     }
 
     #[test]
-    fn test_health_filter_keeps_lines_with_only_one_keyword() {
+    fn test_health_filter_keeps_lines_without_kube_probe() {
         let mut app = test_app();
         app.hide_health_checks = true;
         app.log_lines = vec![
-            tl("GET /health check passed"),            // only "health"
-            tl("user_agent=kube-probe/1.32 GET /api"), // only "kube-probe"
-            tl("INFO: all good"),                      // neither
+            tl("GET /health check passed"), // "health" but no kube-probe
+            tl("INFO: all good"),           // neither
         ];
         let filtered = app.filtered_log_lines();
         let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
-        assert_eq!(
-            lines,
-            vec![
-                "GET /health check passed",
-                "user_agent=kube-probe/1.32 GET /api",
-                "INFO: all good",
-            ]
-        );
+        assert_eq!(lines, vec!["GET /health check passed", "INFO: all good",]);
     }
 
     #[test]
@@ -2816,9 +2810,9 @@ mod tests {
         let mut app = test_app();
         app.hide_health_checks = true;
         app.log_lines = vec![
-            tl("isHealthy kube-probe/1.32"),    // mixed case "Health"
-            tl("HEALTH CHECK Kube-Probe/1.32"), // upper case both
-            tl("health KUBE-PROBE"),            // lower + upper
+            tl("user_agent=kube-probe/1.32"),  // lowercase
+            tl("Kube-Probe/1.32 GET /status"), // mixed case
+            tl("KUBE-PROBE/1.32"),             // upper case
         ];
         let filtered = app.filtered_log_lines();
         assert!(filtered.is_empty(), "all lines should be hidden");
