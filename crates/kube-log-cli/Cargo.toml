@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 kube-log-core = { path = "../kube-log-core" }
 anyhow = "1.0.102"
-chrono = { version = "0.4.44", features = ["serde"] }
+jiff = "0.2.23"
 clap = { version = "4", features = ["derive"] }
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
 futures = "0.3.32"

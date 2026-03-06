@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use chrono::Utc;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
+use jiff::{SignedDuration, Timestamp, Zoned};
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
 use tokio::sync::{mpsc, watch};
@@ -901,8 +901,8 @@ impl App {
         let cutoff = match self.time_range {
             TimeRange::All => None,
             TimeRange::Last(dur) => {
-                let now = Utc::now();
-                Some(now - chrono::Duration::from_std(dur).unwrap_or(chrono::Duration::zero()))
+                let now = Timestamp::now();
+                Some(now - SignedDuration::try_from(dur).unwrap_or(SignedDuration::ZERO))
             }
         };
 
@@ -946,7 +946,7 @@ impl App {
                 kube_log_core::parse::TIMESTAMP_RE
                     .find(&tl.line)
                     .and_then(|m| kube_log_core::parse::parse_log_timestamp(&tl.line[..m.end()]))
-                    .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC)
+                    .unwrap_or(Timestamp::MAX)
             });
         }
 
@@ -1215,7 +1215,7 @@ impl App {
             context: self.current_context.clone(),
             namespace: self.current_namespace.clone(),
             pod_names,
-            exported_at: chrono::Local::now(),
+            exported_at: Zoned::now(),
         }
     }
 
@@ -1235,7 +1235,7 @@ impl App {
         let tx = self.tx.clone();
 
         let ext = format.extension();
-        let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+        let timestamp = Zoned::now().strftime("%Y%m%d-%H%M%S");
         let filename = format!("kube-log-viewer-export-{timestamp}.{ext}");
         let path = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -1343,7 +1343,7 @@ pub struct ExportMetadata {
     pub context: String,
     pub namespace: String,
     pub pod_names: Vec<String>,
-    pub exported_at: chrono::DateTime<chrono::Local>,
+    pub exported_at: Zoned,
 }
 
 impl ExportMetadata {
@@ -1359,7 +1359,7 @@ impl ExportMetadata {
             self.context,
             self.namespace,
             pods,
-            self.exported_at.format("%Y-%m-%d %H:%M:%S %z"),
+            self.exported_at.strftime("%Y-%m-%d %H:%M:%S %z"),
         )
     }
 }
@@ -1413,7 +1413,7 @@ async fn write_json(
         "context": meta.context,
         "namespace": meta.namespace,
         "pods": meta.pod_names,
-        "exported_at": meta.exported_at.format("%Y-%m-%dT%H:%M:%S%z").to_string(),
+        "exported_at": meta.exported_at.strftime("%Y-%m-%dT%H:%M:%S%z").to_string(),
     });
 
     let mut entries: Vec<Value> = Vec::with_capacity(lines.len());
@@ -2100,8 +2100,10 @@ mod tests {
     fn test_filtered_log_lines_time_range_includes_recent() {
         let mut app = test_app();
         app.time_range = TimeRange::Last(Duration::from_secs(60 * 60));
-        // Generate a timestamp that is "now" so it falls within the 1h range
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let now = jiff::Timestamp::now().to_string();
+        // Trim the subsecond portion to get a clean timestamp
+        let now = &now[..19];
+        let now = format!("{now}Z");
         app.log_lines = vec![tl(&format!("{now} recent log entry"))];
         let filtered = app.filtered_log_lines();
         assert_eq!(filtered.len(), 1);
@@ -2122,7 +2124,9 @@ mod tests {
         let mut app = test_app();
         app.time_range = TimeRange::Last(Duration::from_secs(5 * 60));
         app.search_query = "error".to_string();
-        let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+        let now = jiff::Timestamp::now().to_string();
+        let now = &now[..19];
+        let now = format!("{now}Z");
         app.log_lines = vec![
             tl(&format!("{now} INFO: all good")), // recent but no match
             tl(&format!("{now} ERROR: something broke")), // recent and matches
@@ -2606,7 +2610,7 @@ mod tests {
             context: "k8s-cts-aks-d-kubesvc-1".to_string(),
             namespace: "production".to_string(),
             pod_names: vec!["web-abc123".to_string(), "api-def456".to_string()],
-            exported_at: chrono::Local::now(),
+            exported_at: Zoned::now(),
         };
         let header = meta.as_comment_lines();
         assert!(header.contains("# Context:   k8s-cts-aks-d-kubesvc-1"));
@@ -2634,7 +2638,7 @@ mod tests {
             context: "test-ctx".to_string(),
             namespace: "test-ns".to_string(),
             pod_names: vec!["pod-x".to_string()],
-            exported_at: chrono::Local::now(),
+            exported_at: Zoned::now(),
         };
         let lines = vec![
             ("pod-x".to_string(), "line one".to_string()),
@@ -2666,7 +2670,7 @@ mod tests {
             context: "ctx".to_string(),
             namespace: "ns".to_string(),
             pod_names: vec!["pod-a".to_string(), "pod-b".to_string()],
-            exported_at: chrono::Local::now(),
+            exported_at: Zoned::now(),
         };
         let lines = vec![
             ("pod-a".to_string(), "from a".to_string()),
@@ -2694,7 +2698,7 @@ mod tests {
             context: "ctx".to_string(),
             namespace: "ns".to_string(),
             pod_names: vec!["pod-x".to_string()],
-            exported_at: chrono::Local::now(),
+            exported_at: Zoned::now(),
         };
         let lines = vec![
             (
@@ -2737,7 +2741,7 @@ mod tests {
             context: "ctx".to_string(),
             namespace: "ns".to_string(),
             pod_names: vec!["pod-x".to_string()],
-            exported_at: chrono::Local::now(),
+            exported_at: Zoned::now(),
         };
         let lines = vec![
             (

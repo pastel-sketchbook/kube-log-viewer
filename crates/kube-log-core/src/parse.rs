@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 use std::sync::LazyLock;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use jiff::{Timestamp, civil, tz::TimeZone};
 use regex::Regex;
 use serde_json::Value;
 
@@ -127,7 +127,7 @@ pub fn format_json_line(line: &str) -> Cow<'_, str> {
 // Timestamp parsing
 // ---------------------------------------------------------------------------
 
-/// Try to parse a timestamp string into a `DateTime<Utc>`.
+/// Try to parse a timestamp string into a [`jiff::Timestamp`].
 ///
 /// Handles a wide range of ISO 8601 variants commonly found in K8s pod logs:
 /// - RFC 3339 with timezone: `2026-02-24T16:36:51Z`, `...+05:30`
@@ -137,15 +137,15 @@ pub fn format_json_line(line: &str) -> Cow<'_, str> {
 /// - Plain without fractional: `2026-02-24 15:05:18`, `...T15:05:18`
 ///
 /// Timezone-less timestamps are assumed UTC.
-pub fn parse_log_timestamp(ts: &str) -> Option<DateTime<Utc>> {
+pub fn parse_log_timestamp(ts: &str) -> Option<Timestamp> {
     let trimmed = ts.trim();
 
     // Normalise comma to dot so Python-style `18,976` becomes `18.976`.
     let normalised = trimmed.replace(',', ".");
 
     // 1. RFC 3339 (requires timezone designator)
-    if let Ok(dt) = DateTime::parse_from_rfc3339(&normalised) {
-        return Some(dt.to_utc());
+    if let Ok(t) = normalised.parse::<Timestamp>() {
+        return Some(t);
     }
 
     // 2. ISO variants without timezone — try most specific first.
@@ -157,8 +157,8 @@ pub fn parse_log_timestamp(ts: &str) -> Option<DateTime<Utc>> {
     ];
 
     for fmt in NAIVE_FMTS {
-        if let Ok(naive) = NaiveDateTime::parse_from_str(&normalised, fmt) {
-            return Some(naive.and_utc());
+        if let Ok(dt) = civil::DateTime::strptime(fmt, &normalised) {
+            return dt.to_zoned(TimeZone::UTC).ok().map(|z| z.timestamp());
         }
     }
 
@@ -186,79 +186,79 @@ pub fn strip_duplicate_timestamp(line: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Timelike;
+    use jiff::tz::TimeZone;
 
     // -- parse_log_timestamp ------------------------------------------------
 
     #[test]
     fn test_parse_rfc3339_z() {
         let dt = parse_log_timestamp("2026-02-24T16:36:51Z").unwrap();
-        assert_eq!(dt.timestamp(), 1771951011);
+        assert_eq!(dt.as_second(), 1771951011);
     }
 
     #[test]
     fn test_parse_rfc3339_fractional() {
         let dt = parse_log_timestamp("2026-02-24T16:36:51.600Z").unwrap();
-        assert_eq!(dt.timestamp(), 1771951011);
+        assert_eq!(dt.as_second(), 1771951011);
     }
 
     #[test]
     fn test_parse_rfc3339_offset() {
         let dt = parse_log_timestamp("2026-02-24T16:36:51+05:30").unwrap();
         // 16:36:51 +05:30 = 11:06:51 UTC
-        assert_eq!(dt.hour(), 11);
+        assert_eq!(dt.to_zoned(TimeZone::UTC).hour(), 11);
     }
 
     #[test]
     fn test_parse_space_separated() {
         let dt = parse_log_timestamp("2026-02-24 16:36:51").unwrap();
-        assert_eq!(dt.timestamp(), 1771951011);
+        assert_eq!(dt.as_second(), 1771951011);
     }
 
     #[test]
     fn test_parse_comma_fractional_space() {
         // Python logging format: `2026-02-24 15:05:18,976`
         let dt = parse_log_timestamp("2026-02-24 15:05:18,976").unwrap();
-        assert_eq!(dt.timestamp(), 1771945518);
+        assert_eq!(dt.as_second(), 1771945518);
     }
 
     #[test]
     fn test_parse_dot_fractional_space() {
         let dt = parse_log_timestamp("2026-02-24 15:05:18.976").unwrap();
-        assert_eq!(dt.timestamp(), 1771945518);
+        assert_eq!(dt.as_second(), 1771945518);
     }
 
     #[test]
     fn test_parse_dot_fractional_t_no_tz() {
         // ISO with T separator, fractional, but no timezone
         let dt = parse_log_timestamp("2026-02-24T15:05:18.976").unwrap();
-        assert_eq!(dt.timestamp(), 1771945518);
+        assert_eq!(dt.as_second(), 1771945518);
     }
 
     #[test]
     fn test_parse_comma_fractional_t_no_tz() {
         let dt = parse_log_timestamp("2026-02-24T15:05:18,976").unwrap();
-        assert_eq!(dt.timestamp(), 1771945518);
+        assert_eq!(dt.as_second(), 1771945518);
     }
 
     #[test]
     fn test_parse_t_no_fractional_no_tz() {
         let dt = parse_log_timestamp("2026-02-24T15:05:18").unwrap();
-        assert_eq!(dt.timestamp(), 1771945518);
+        assert_eq!(dt.as_second(), 1771945518);
     }
 
     #[test]
     fn test_parse_k8s_nanosecond() {
         // K8s native format with 9-digit fractional
         let dt = parse_log_timestamp("2026-02-24T16:36:51.600000000Z").unwrap();
-        assert_eq!(dt.timestamp(), 1771951011);
+        assert_eq!(dt.as_second(), 1771951011);
     }
 
     #[test]
     fn test_parse_comma_fractional_rfc3339() {
         // Comma fractional with timezone (rare but possible)
         let dt = parse_log_timestamp("2026-02-24T15:05:18,976Z").unwrap();
-        assert_eq!(dt.timestamp(), 1771945518);
+        assert_eq!(dt.as_second(), 1771945518);
     }
 
     #[test]

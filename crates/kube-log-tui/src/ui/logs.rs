@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use chrono::{DateTime, Local, Utc};
+use jiff::{Timestamp, tz::TimeZone};
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
@@ -431,9 +431,9 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 // ---------------------------------------------------------------------------
 
 /// Format a UTC timestamp as local time.
-fn format_local(dt: DateTime<Utc>) -> String {
-    let local: DateTime<Local> = dt.into();
-    format!("{} ", local.format("%Y-%m-%d %H:%M:%S"))
+fn format_local(ts: Timestamp) -> String {
+    let local = ts.to_zoned(TimeZone::system());
+    format!("{} ", local.strftime("%Y-%m-%d %H:%M:%S"))
 }
 
 /// Fixed display width for relative timestamps (right-aligned).
@@ -442,8 +442,8 @@ const RELATIVE_WIDTH: usize = 8;
 
 /// Format a duration as a compact relative string, right-aligned to a fixed
 /// width so that log content after the timestamp starts at the same column.
-fn format_relative(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let secs = now.signed_duration_since(dt).num_seconds().max(0);
+fn format_relative(ts: Timestamp, now: Timestamp) -> String {
+    let secs = now.duration_since(ts).as_secs().max(0);
     let rel = match secs {
         s if s < 60 => format!("{s}s ago"),
         s if s < 3600 => format!("{}m ago", s / 60),
@@ -460,7 +460,7 @@ fn convert_timestamp(ts: &str, mode: TimestampMode) -> Option<String> {
         TimestampMode::Utc => None, // keep original
         TimestampMode::Local => parse_log_timestamp(ts).map(format_local),
         TimestampMode::Relative => {
-            parse_log_timestamp(ts).map(|dt| format_relative(dt, Utc::now()))
+            parse_log_timestamp(ts).map(|dt| format_relative(dt, Timestamp::now()))
         }
     }
 }
@@ -817,32 +817,32 @@ mod tests {
 
     #[test]
     fn test_format_relative_seconds() {
-        let now = Utc::now();
-        let dt = now - chrono::Duration::seconds(30);
+        let now = Timestamp::now();
+        let dt = now - jiff::SignedDuration::from_secs(30);
         let result = format_relative(dt, now);
         assert_eq!(result, " 30s ago ");
     }
 
     #[test]
     fn test_format_relative_minutes() {
-        let now = Utc::now();
-        let dt = now - chrono::Duration::seconds(300);
+        let now = Timestamp::now();
+        let dt = now - jiff::SignedDuration::from_secs(300);
         let result = format_relative(dt, now);
         assert_eq!(result, "  5m ago ");
     }
 
     #[test]
     fn test_format_relative_hours() {
-        let now = Utc::now();
-        let dt = now - chrono::Duration::seconds(7200);
+        let now = Timestamp::now();
+        let dt = now - jiff::SignedDuration::from_secs(7200);
         let result = format_relative(dt, now);
         assert_eq!(result, "  2h ago ");
     }
 
     #[test]
     fn test_format_relative_days() {
-        let now = Utc::now();
-        let dt = now - chrono::Duration::seconds(172800);
+        let now = Timestamp::now();
+        let dt = now - jiff::SignedDuration::from_secs(172800);
         let result = format_relative(dt, now);
         assert_eq!(result, "  2d ago ");
     }

@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 use crate::classify::normalize;
 use crate::filter::FilterStats;
@@ -58,7 +58,7 @@ const RESTART_PATTERNS: &[&str] = &[
 /// Accumulator for error/warning buckets during the reduce phase.
 struct BucketAccumulator {
     /// canonical → (count, first_seen, last_seen, sample)
-    buckets: HashMap<String, (u64, DateTime<Utc>, DateTime<Utc>, String)>,
+    buckets: HashMap<String, (u64, Timestamp, Timestamp, String)>,
 }
 
 impl BucketAccumulator {
@@ -70,7 +70,7 @@ impl BucketAccumulator {
 
     fn add(&mut self, line: &ClassifiedLine) {
         let canonical = normalize(&line.raw);
-        let ts = line.timestamp.unwrap_or_else(Utc::now);
+        let ts = line.timestamp.unwrap_or_else(Timestamp::now);
 
         self.buckets
             .entry(canonical)
@@ -112,7 +112,7 @@ impl BucketAccumulator {
 /// Accumulator for 1-minute timeline buckets.
 struct TimelineAccumulator {
     /// bucket_start → (error_count, warning_count, novel_count)
-    buckets: HashMap<DateTime<Utc>, (u64, u64, u64)>,
+    buckets: HashMap<Timestamp, (u64, u64, u64)>,
 }
 
 impl TimelineAccumulator {
@@ -185,8 +185,8 @@ pub fn reduce(lines: &[ClassifiedLine], filter_stats: &FilterStats) -> Summary {
 
     let mut error_count: u64 = 0;
     let mut warning_count: u64 = 0;
-    let mut first_ts: Option<DateTime<Utc>> = None;
-    let mut last_ts: Option<DateTime<Utc>> = None;
+    let mut first_ts: Option<Timestamp> = None;
+    let mut last_ts: Option<Timestamp> = None;
 
     for line in lines {
         // Track time range.
@@ -226,7 +226,7 @@ pub fn reduce(lines: &[ClassifiedLine], filter_stats: &FilterStats) -> Summary {
                 // Check for restart indicators.
                 let text = line.msg.as_deref().unwrap_or(&line.raw);
                 if RESTART_PATTERNS.iter().any(|p| text.contains(p)) {
-                    let ts = line.timestamp.unwrap_or_else(Utc::now);
+                    let ts = line.timestamp.unwrap_or_else(Timestamp::now);
                     // Extract reason: use the first matching pattern.
                     let reason = RESTART_PATTERNS
                         .iter()
@@ -264,9 +264,9 @@ pub fn reduce(lines: &[ClassifiedLine], filter_stats: &FilterStats) -> Summary {
 // ---------------------------------------------------------------------------
 
 /// Truncate a timestamp to the start of its minute.
-fn truncate_to_minute(ts: DateTime<Utc>) -> DateTime<Utc> {
-    let secs = ts.timestamp() - (ts.timestamp() % 60);
-    DateTime::from_timestamp(secs, 0).unwrap_or(ts)
+fn truncate_to_minute(ts: Timestamp) -> Timestamp {
+    let secs = ts.as_second() - (ts.as_second() % 60);
+    Timestamp::from_second(secs).unwrap_or(ts)
 }
 
 // ---------------------------------------------------------------------------
@@ -276,12 +276,14 @@ fn truncate_to_minute(ts: DateTime<Utc>) -> DateTime<Utc> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration, TimeZone};
+    use jiff::SignedDuration;
 
     /// Helper to make a ClassifiedLine with a specific timestamp offset.
     fn make_line_at(class: LineClass, raw: &str, minutes_offset: i64) -> ClassifiedLine {
-        let base = Utc.with_ymd_and_hms(2026, 3, 6, 10, 0, 0).unwrap();
-        let ts = base + Duration::minutes(minutes_offset);
+        let base: Timestamp = "2026-03-06T10:00:00Z".parse().unwrap();
+        let ts = base
+            .checked_add(SignedDuration::from_secs(minutes_offset * 60))
+            .unwrap();
         ClassifiedLine {
             timestamp: Some(ts),
             pod: "pod-1".to_string(),
@@ -340,9 +342,16 @@ mod tests {
         assert!(first.is_some());
         assert!(last.is_some());
         // First should be minute 1, last should be minute 10.
-        let base = Utc.with_ymd_and_hms(2026, 3, 6, 10, 0, 0).unwrap();
-        assert_eq!(first.unwrap(), base + Duration::minutes(1));
-        assert_eq!(last.unwrap(), base + Duration::minutes(10));
+        let base: Timestamp = "2026-03-06T10:00:00Z".parse().unwrap();
+        assert_eq!(
+            first.unwrap(),
+            base.checked_add(SignedDuration::from_secs(60)).unwrap()
+        );
+        assert_eq!(
+            last.unwrap(),
+            base.checked_add(SignedDuration::from_secs(10 * 60))
+                .unwrap()
+        );
     }
 
     #[test]
@@ -453,8 +462,11 @@ mod tests {
         let summary = reduce(&lines, &default_stats(70, 0));
         assert!(summary.timeline.len() <= MAX_TIMELINE_BUCKETS);
         // The earliest entries should be dropped, keeping minutes 10-69.
-        let base = Utc.with_ymd_and_hms(2026, 3, 6, 10, 0, 0).unwrap();
-        let expected_first = truncate_to_minute(base + Duration::minutes(10));
+        let base: Timestamp = "2026-03-06T10:00:00Z".parse().unwrap();
+        let expected_first = truncate_to_minute(
+            base.checked_add(SignedDuration::from_secs(10 * 60))
+                .unwrap(),
+        );
         assert_eq!(summary.timeline[0].bucket_start, expected_first);
     }
 
@@ -566,26 +578,30 @@ mod tests {
         assert_eq!(summary.top_errors.len(), 1);
         let bucket = &summary.top_errors[0];
         assert_eq!(bucket.count, 3);
-        let base = Utc.with_ymd_and_hms(2026, 3, 6, 10, 0, 0).unwrap();
-        assert_eq!(bucket.first_seen, base + Duration::minutes(1));
-        assert_eq!(bucket.last_seen, base + Duration::minutes(5));
+        let base: Timestamp = "2026-03-06T10:00:00Z".parse().unwrap();
+        assert_eq!(
+            bucket.first_seen,
+            base.checked_add(SignedDuration::from_secs(60)).unwrap()
+        );
+        assert_eq!(
+            bucket.last_seen,
+            base.checked_add(SignedDuration::from_secs(5 * 60)).unwrap()
+        );
     }
 
     // -- truncate_to_minute -------------------------------------------------
 
     #[test]
     fn test_truncate_to_minute() {
-        let ts = Utc.with_ymd_and_hms(2026, 3, 6, 10, 15, 47).unwrap();
+        let ts: Timestamp = "2026-03-06T10:15:47Z".parse().unwrap();
         let truncated = truncate_to_minute(ts);
-        assert_eq!(
-            truncated,
-            Utc.with_ymd_and_hms(2026, 3, 6, 10, 15, 0).unwrap()
-        );
+        let expected: Timestamp = "2026-03-06T10:15:00Z".parse().unwrap();
+        assert_eq!(truncated, expected);
     }
 
     #[test]
     fn test_truncate_to_minute_already_on_boundary() {
-        let ts = Utc.with_ymd_and_hms(2026, 3, 6, 10, 15, 0).unwrap();
+        let ts: Timestamp = "2026-03-06T10:15:00Z".parse().unwrap();
         assert_eq!(truncate_to_minute(ts), ts);
     }
 }

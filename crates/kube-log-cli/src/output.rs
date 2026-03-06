@@ -8,8 +8,8 @@
 use std::io::{self, Write};
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
 use futures::StreamExt;
+use jiff::Timestamp;
 use tokio::sync::watch;
 
 use kube_log_core::classify::Classifier;
@@ -20,10 +20,45 @@ use kube_log_core::k8s::logs::LogStreamItem;
 use kube_log_core::reduce;
 use kube_log_core::types::{ClassifiedLine, FilterConfig, PipelineOutput, PodSummary};
 
+use kube_log_core::k8s::pods::PodInfo;
+
 use crate::cli::{LogsArgs, NamespacesArgs, PodsArgs};
 
 // ---------------------------------------------------------------------------
-// Context / namespace resolution helpers
+// Well-known sidecar / init container names
+// ---------------------------------------------------------------------------
+
+/// Container names that are typically injected by service meshes, secret
+/// managers, or platform tooling.  When a pod has multiple containers and the
+/// user did not specify `--container`, we filter these out so the CLI
+/// auto-selects the application container.
+const KNOWN_SIDECARS: &[&str] = &[
+    // Istio
+    "istio-init",
+    "istio-proxy",
+    // Envoy standalone
+    "envoy",
+    "envoy-proxy",
+    // Linkerd
+    "linkerd-init",
+    "linkerd-proxy",
+    // Vault agent injector
+    "vault-agent",
+    "vault-agent-init",
+    // AWS App Mesh
+    "appmesh-envoy",
+    // Datadog
+    "datadog-agent",
+    // Fluentd / Fluent Bit sidecar logging
+    "fluentd",
+    "fluent-bit",
+    // CloudSQL proxy (GCP)
+    "cloud-sql-proxy",
+    "cloudsql-proxy",
+];
+
+// ---------------------------------------------------------------------------
+// Context / namespace / container resolution helpers
 // ---------------------------------------------------------------------------
 
 /// Resolve the K8s context to use: explicit `--context` flag or current from kubeconfig.
@@ -42,6 +77,46 @@ fn resolve_context(explicit: &Option<String>) -> Result<String> {
 /// Resolve the namespace: explicit `--namespace` flag or fall back to "default".
 fn resolve_namespace(explicit: &Option<String>) -> String {
     explicit.clone().unwrap_or_else(|| "default".to_string())
+}
+
+/// Determine which container(s) to stream logs from.
+///
+/// - If the user specified `--container`, return that single container.
+/// - If the pod has exactly one container, return it.
+/// - If the pod has multiple containers, filter out well-known sidecars/init
+///   containers and return the remaining "application" containers.
+/// - If filtering removes *all* containers (unlikely but defensive), fall back
+///   to the full list so we never return an empty set.
+fn resolve_containers(explicit: &Option<String>, pod_info: Option<&PodInfo>) -> Vec<String> {
+    // Explicit --container always wins.
+    if let Some(c) = explicit {
+        return vec![c.clone()];
+    }
+
+    let containers = match pod_info {
+        Some(info) if !info.containers.is_empty() => &info.containers,
+        // No info available — return empty so the caller passes `None`
+        // (single-container pods work fine with container=None).
+        _ => return Vec::new(),
+    };
+
+    if containers.len() == 1 {
+        return containers.clone();
+    }
+
+    // Multiple containers: filter out known sidecars.
+    let filtered: Vec<String> = containers
+        .iter()
+        .filter(|name| !KNOWN_SIDECARS.contains(&name.as_str()))
+        .cloned()
+        .collect();
+
+    // If filtering removed everything, use the full list.
+    if filtered.is_empty() {
+        containers.clone()
+    } else {
+        filtered
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -75,14 +150,16 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
     let time_range = args.parse_time_range()?;
     let search = args.search.clone();
 
+    // Fetch pod info once — used for pod discovery, container resolution, and summaries.
+    let all_pods = k8s::pods::list_pods(&context, &namespace)
+        .await
+        .with_context(|| {
+            format!("failed to list pods in namespace '{namespace}' (context '{context}')")
+        })?;
+
     // Resolve target pods: explicit --pod flags or auto-discover all in namespace.
     let pod_names: Vec<String> = if args.pod.is_empty() {
-        let pods = k8s::pods::list_pods(&context, &namespace)
-            .await
-            .with_context(|| {
-                format!("failed to list pods in namespace '{namespace}' (context '{context}')")
-            })?;
-        if pods.is_empty() {
+        if all_pods.is_empty() {
             let suggestions = suggest_namespaces(&context, &namespace).await;
             if suggestions.is_empty() {
                 bail!("no pods found in namespace '{namespace}' (context '{context}')");
@@ -93,13 +170,21 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
                 );
             }
         }
-        pods.iter().map(|p| p.name.clone()).collect()
+        all_pods.iter().map(|p| p.name.clone()).collect()
     } else {
         args.pod.clone()
     };
 
     if args.follow {
-        return run_logs_follow(&args, &context, &namespace, &filter_config, &pod_names).await;
+        return run_logs_follow(
+            &args,
+            &context,
+            &namespace,
+            &filter_config,
+            &pod_names,
+            &all_pods,
+        )
+        .await;
     }
 
     // Batch mode: fetch logs for all pods, classify, filter, reduce, export.
@@ -107,15 +192,10 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
     let mut all_classified: Vec<ClassifiedLine> = Vec::new();
     let mut pod_summaries: Vec<PodSummary> = Vec::new();
 
-    // Fetch pod info once for summaries.
-    let all_pods = k8s::pods::list_pods(&context, &namespace)
-        .await
-        .with_context(|| {
-            format!("failed to list pods in namespace '{namespace}' (context '{context}')")
-        })?;
-
     for pod_name in &pod_names {
-        if let Some(info) = all_pods.iter().find(|p| p.name == *pod_name) {
+        let pod_info = all_pods.iter().find(|p| p.name == *pod_name);
+
+        if let Some(info) = pod_info {
             pod_summaries.push(PodSummary {
                 name: info.name.clone(),
                 status: info.status.clone(),
@@ -123,61 +203,79 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
             });
         }
 
-        // Stream logs with a cancellation channel.
-        let (cancel_tx, cancel_rx) = watch::channel(false);
-        let mut stream = k8s::logs::stream_logs(
-            &context,
-            &namespace,
-            pod_name,
-            args.container.as_deref(),
-            cancel_rx,
-        )
-        .await
-        .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
+        // Resolve which container(s) to stream logs from.
+        let containers = resolve_containers(&args.container, pod_info);
 
-        let mut line_count: u64 = 0;
-        let max_lines = args.lines as u64;
+        // If resolve_containers returned an empty list, the pod likely has a
+        // single container and the K8s API can infer it — stream once with
+        // container=None. Otherwise stream each resolved container.
+        let container_targets: Vec<Option<&str>> = if containers.is_empty() {
+            vec![None]
+        } else {
+            containers.iter().map(|c| Some(c.as_str())).collect()
+        };
 
-        // Compute the cutoff timestamp for --time-range filtering.
-        let cutoff = time_range.map(|dur| Utc::now() - dur);
+        for container in &container_targets {
+            // Stream logs with a cancellation channel.
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let mut stream =
+                k8s::logs::stream_logs(&context, &namespace, pod_name, *container, cancel_rx)
+                    .await
+                    .with_context(|| match container {
+                        Some(c) => format!(
+                            "failed to start log stream for pod '{pod_name}' container '{c}'"
+                        ),
+                        None => format!("failed to start log stream for pod '{pod_name}'"),
+                    })?;
 
-        while let Some(item) = stream.next().await {
-            match item {
-                LogStreamItem::Line(text) => {
-                    // Apply --search filter.
-                    if let Some(ref query) = search
-                        && !text.contains(query.as_str())
-                    {
-                        continue;
+            let mut line_count: u64 = 0;
+            let max_lines = args.lines as u64;
+
+            // Compute the cutoff timestamp for --time-range filtering.
+            let cutoff = time_range.map(|dur| Timestamp::now() - dur);
+
+            while let Some(item) = stream.next().await {
+                match item {
+                    LogStreamItem::Line(text) => {
+                        // Apply --search filter.
+                        if let Some(ref query) = search
+                            && !text.contains(query.as_str())
+                        {
+                            continue;
+                        }
+
+                        let classified = classifier.classify(&text, pod_name, *container);
+
+                        // Apply --time-range filter.
+                        if let Some(cutoff_ts) = cutoff
+                            && let Some(ts) = classified.timestamp
+                            && ts < cutoff_ts
+                        {
+                            continue;
+                        }
+
+                        all_classified.push(classified);
+                        line_count += 1;
+
+                        if line_count >= max_lines {
+                            break;
+                        }
                     }
-
-                    let classified =
-                        classifier.classify(&text, pod_name, args.container.as_deref());
-
-                    // Apply --time-range filter.
-                    if let Some(cutoff_ts) = cutoff
-                        && let Some(ts) = classified.timestamp
-                        && ts < cutoff_ts
-                    {
-                        continue;
-                    }
-
-                    all_classified.push(classified);
-                    line_count += 1;
-
-                    if line_count >= max_lines {
+                    LogStreamItem::Error(e) => {
+                        tracing::warn!(
+                            pod = pod_name,
+                            container = *container,
+                            error = %e,
+                            "log stream error"
+                        );
                         break;
                     }
                 }
-                LogStreamItem::Error(e) => {
-                    tracing::warn!(pod = pod_name, error = %e, "log stream error");
-                    break;
-                }
             }
-        }
 
-        // Signal cancellation so the background task cleans up.
-        let _ = cancel_tx.send(true);
+            // Signal cancellation so the background task cleans up.
+            let _ = cancel_tx.send(true);
+        }
     }
 
     // Run the filter stage.
@@ -236,13 +334,14 @@ async fn run_logs_follow(
     namespace: &str,
     filter_config: &FilterConfig,
     pod_names: &[String],
+    all_pods: &[PodInfo],
 ) -> Result<()> {
     let stdout = io::stdout();
     let mut writer = io::BufWriter::new(stdout.lock());
     let mut classifier = Classifier::new();
     let search = args.search.clone();
     let time_range = args.parse_time_range()?;
-    let cutoff = time_range.map(|dur| Utc::now() - dur);
+    let cutoff = time_range.map(|dur| Timestamp::now() - dur);
 
     // For follow mode we only support a single pod currently.
     // Multi-pod follow would require multiplexing streams.
@@ -253,16 +352,31 @@ async fn run_logs_follow(
     }
     let pod_name = &pod_names[0];
 
+    // Resolve which container(s) to follow.
+    let pod_info = all_pods.iter().find(|p| p.name == *pod_name);
+    let containers = resolve_containers(&args.container, pod_info);
+
+    // For follow mode with multiple containers we'd need to multiplex streams.
+    // For now, if there are multiple application containers, pick the first one
+    // and warn.  The user can always specify --container explicitly.
+    let container: Option<&str> = if containers.is_empty() {
+        None
+    } else {
+        if containers.len() > 1 {
+            eprintln!(
+                "warning: pod '{pod_name}' has {} application containers ({}); following '{}'. Use --container to select a different one.",
+                containers.len(),
+                containers.join(", "),
+                containers[0],
+            );
+        }
+        Some(containers[0].as_str())
+    };
+
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let mut stream = k8s::logs::stream_logs(
-        context,
-        namespace,
-        pod_name,
-        args.container.as_deref(),
-        cancel_rx,
-    )
-    .await
-    .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
+    let mut stream = k8s::logs::stream_logs(context, namespace, pod_name, container, cancel_rx)
+        .await
+        .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
 
     // Install ctrl-c handler to cancel the stream gracefully.
     let cancel_tx_clone = cancel_tx.clone();
@@ -283,7 +397,7 @@ async fn run_logs_follow(
                     continue;
                 }
 
-                let classified = classifier.classify(&text, pod_name, args.container.as_deref());
+                let classified = classifier.classify(&text, pod_name, container);
 
                 // Apply --time-range filter.
                 if let Some(cutoff_ts) = cutoff
@@ -408,4 +522,118 @@ pub async fn run_namespaces(args: NamespacesArgs) -> Result<()> {
     writer.flush().context("failed to flush stdout")?;
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube_log_core::k8s::pods::PodInfo;
+
+    /// Helper to build a `PodInfo` with the given container names.
+    fn pod_with_containers(name: &str, containers: Vec<&str>) -> PodInfo {
+        PodInfo {
+            name: name.to_string(),
+            status: "Running".to_string(),
+            ready: format!("{}/{}", containers.len(), containers.len()),
+            restarts: 0,
+            containers: containers.into_iter().map(String::from).collect(),
+        }
+    }
+
+    // -- resolve_containers --------------------------------------------------
+
+    #[test]
+    fn explicit_container_wins_over_pod_info() {
+        let pod = pod_with_containers("my-pod", vec!["app", "istio-proxy"]);
+        let result = resolve_containers(&Some("istio-proxy".to_string()), Some(&pod));
+        assert_eq!(result, vec!["istio-proxy"]);
+    }
+
+    #[test]
+    fn single_container_returns_it() {
+        let pod = pod_with_containers("my-pod", vec!["app"]);
+        let result = resolve_containers(&None, Some(&pod));
+        assert_eq!(result, vec!["app"]);
+    }
+
+    #[test]
+    fn multi_container_filters_sidecars() {
+        let pod = pod_with_containers("my-pod", vec!["istio-init", "my-app", "istio-proxy"]);
+        let result = resolve_containers(&None, Some(&pod));
+        assert_eq!(result, vec!["my-app"]);
+    }
+
+    #[test]
+    fn multi_container_keeps_multiple_app_containers() {
+        let pod = pod_with_containers("my-pod", vec!["istio-init", "web", "worker", "istio-proxy"]);
+        let result = resolve_containers(&None, Some(&pod));
+        assert_eq!(result, vec!["web", "worker"]);
+    }
+
+    #[test]
+    fn all_sidecar_pod_returns_full_list() {
+        // Edge case: every container is a known sidecar (unlikely but defensive).
+        let pod = pod_with_containers(
+            "sidecar-only",
+            vec!["istio-init", "istio-proxy", "vault-agent"],
+        );
+        let result = resolve_containers(&None, Some(&pod));
+        // Filtering removed everything → fall back to full list.
+        assert_eq!(result, vec!["istio-init", "istio-proxy", "vault-agent"]);
+    }
+
+    #[test]
+    fn no_pod_info_returns_empty() {
+        let result = resolve_containers(&None, None);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn empty_containers_returns_empty() {
+        let pod = pod_with_containers("empty-pod", vec![]);
+        let result = resolve_containers(&None, Some(&pod));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn linkerd_sidecars_are_filtered() {
+        let pod = pod_with_containers(
+            "my-pod",
+            vec!["linkerd-init", "api-server", "linkerd-proxy"],
+        );
+        let result = resolve_containers(&None, Some(&pod));
+        assert_eq!(result, vec!["api-server"]);
+    }
+
+    #[test]
+    fn vault_agent_sidecars_are_filtered() {
+        let pod = pod_with_containers("my-pod", vec!["vault-agent-init", "backend", "vault-agent"]);
+        let result = resolve_containers(&None, Some(&pod));
+        assert_eq!(result, vec!["backend"]);
+    }
+
+    #[test]
+    fn cloud_sql_proxy_is_filtered() {
+        let pod = pod_with_containers("my-pod", vec!["cloud-sql-proxy", "django-app"]);
+        let result = resolve_containers(&None, Some(&pod));
+        assert_eq!(result, vec!["django-app"]);
+    }
+
+    // -- KNOWN_SIDECARS constant ---------------------------------------------
+
+    #[test]
+    fn known_sidecars_has_expected_entries() {
+        // Smoke test: ensure key sidecar names are present.
+        assert!(KNOWN_SIDECARS.contains(&"istio-init"));
+        assert!(KNOWN_SIDECARS.contains(&"istio-proxy"));
+        assert!(KNOWN_SIDECARS.contains(&"envoy"));
+        assert!(KNOWN_SIDECARS.contains(&"linkerd-proxy"));
+        assert!(KNOWN_SIDECARS.contains(&"vault-agent"));
+        assert!(KNOWN_SIDECARS.contains(&"cloud-sql-proxy"));
+        assert!(KNOWN_SIDECARS.contains(&"datadog-agent"));
+    }
 }

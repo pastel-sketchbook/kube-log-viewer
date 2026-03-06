@@ -119,7 +119,7 @@ pub fn export_plain<W: Write>(
 /// Write a single classified line in plain text format.
 fn write_plain_line<W: Write>(writer: &mut W, line: &ClassifiedLine) -> io::Result<()> {
     let class_tag = line.class.label().to_uppercase();
-    let ts = line.timestamp.map(|t| t.to_rfc3339()).unwrap_or_default();
+    let ts = line.timestamp.map(|t| t.to_string()).unwrap_or_default();
 
     if ts.is_empty() {
         writeln!(writer, "[{:>11}] {}", class_tag, line.raw)
@@ -166,11 +166,11 @@ pub fn export<W: Write>(
 mod tests {
     use super::*;
     use crate::types::LineClass;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     fn make_line(class: LineClass, raw: &str) -> ClassifiedLine {
         ClassifiedLine {
-            timestamp: Some(Utc::now()),
+            timestamp: Some(Timestamp::now()),
             pod: "pod-1".to_string(),
             container: Some("app".to_string()),
             class,
@@ -183,7 +183,7 @@ mod tests {
 
     fn make_summary() -> Summary {
         Summary {
-            time_range: (Some(Utc::now()), Some(Utc::now())),
+            time_range: (Some(Timestamp::now()), Some(Timestamp::now())),
             total_lines: 1000,
             suppressed_lines: 900,
             error_count: 10,
@@ -412,7 +412,7 @@ mod tests {
         let summary = Summary {
             restart_events: vec![RestartEvent {
                 pod: "api-pod".to_string(),
-                at: Utc::now(),
+                at: Timestamp::now(),
                 reason: "OOMKilled".to_string(),
             }],
             ..make_summary()

@@ -6,7 +6,7 @@ description = "Shared library for Kubernetes log fetching, streaming, and parsin
 
 [dependencies]
 anyhow = "1.0.102"
-chrono = { version = "0.4.44", features = ["serde"] }
+jiff = { version = "0.2.23", features = ["serde"] }
 futures = "0.3.32"
 k8s-openapi = { version = "0.27.1", features = ["v1_32"] }
 kube = { version = "3.0.1", features = ["client", "config", "runtime", "rustls-tls"] }

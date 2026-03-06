@@ -7,7 +7,7 @@
 //! 3. Kept lines → [`Summary`] + filtered [`ClassifiedLine`]s (via `reduce.rs`)
 //! 4. [`Summary`] + lines → JSON/JSONL/plain text (via `export.rs`)
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
@@ -71,7 +71,7 @@ impl LineClass {
 pub struct ClassifiedLine {
     /// ISO 8601 UTC timestamp, when parseable from the log line.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<DateTime<Utc>>,
+    pub timestamp: Option<Timestamp>,
 
     /// Source pod name.
     pub pod: String,
@@ -132,7 +132,7 @@ pub struct CollapsedGroup {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Summary {
     /// Time range of the analyzed log lines `[first, last]`.
-    pub time_range: (Option<DateTime<Utc>>, Option<DateTime<Utc>>),
+    pub time_range: (Option<Timestamp>, Option<Timestamp>),
 
     /// Total number of log lines received (before filtering).
     pub total_lines: u64,
@@ -192,10 +192,10 @@ pub struct ErrorBucket {
     pub count: u64,
 
     /// When this pattern was first seen.
-    pub first_seen: DateTime<Utc>,
+    pub first_seen: Timestamp,
 
     /// When this pattern was last seen.
-    pub last_seen: DateTime<Utc>,
+    pub last_seen: Timestamp,
 
     /// One verbatim example for the LLM to read.
     pub sample: String,
@@ -205,7 +205,7 @@ pub struct ErrorBucket {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineEntry {
     /// Start of the time bucket (1-minute granularity).
-    pub bucket_start: DateTime<Utc>,
+    pub bucket_start: Timestamp,
 
     /// Number of error-class lines in this bucket.
     pub error_count: u64,
@@ -224,7 +224,7 @@ pub struct RestartEvent {
     pub pod: String,
 
     /// When the restart was observed.
-    pub at: DateTime<Utc>,
+    pub at: Timestamp,
 
     /// Reason string from K8s (e.g. "CrashLoopBackOff", "OOMKilled").
     pub reason: String,
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn test_classified_line_json_round_trip() {
         let line = ClassifiedLine {
-            timestamp: Some(Utc::now()),
+            timestamp: Some(Timestamp::now()),
             pod: "payments-7f8d".to_string(),
             container: Some("app".to_string()),
             class: LineClass::Error,

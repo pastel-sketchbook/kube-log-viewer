@@ -161,12 +161,12 @@ pub fn filter(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use jiff::Timestamp;
 
     /// Helper to build a ClassifiedLine with minimal boilerplate.
     fn make_line(class: LineClass, raw: &str) -> ClassifiedLine {
         ClassifiedLine {
-            timestamp: Some(Utc::now()),
+            timestamp: Some(Timestamp::now()),
             pod: "pod-1".to_string(),
             container: None,
             class,

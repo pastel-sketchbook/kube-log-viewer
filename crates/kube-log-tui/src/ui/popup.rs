@@ -52,7 +52,7 @@ fn export_format_items(normal: Color) -> Vec<ListItem<'static>> {
 /// Generate a preview filename for the given export format.
 fn export_preview_filename(format: ExportFormat) -> String {
     let ext = format.extension();
-    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let ts = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
     format!("kube-log-viewer-export-{ts}.{ext}")
 }
 

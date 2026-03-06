@@ -136,11 +136,11 @@ impl LogsArgs {
         }
     }
 
-    /// Parse `--time-range` into a [`chrono::Duration`].
+    /// Parse `--time-range` into a [`jiff::SignedDuration`].
     ///
     /// Supports suffixes: `s` (seconds), `m` (minutes), `h` (hours), `d` (days).
     /// Returns `None` if no `--time-range` was specified.
-    pub fn parse_time_range(&self) -> anyhow::Result<Option<chrono::Duration>> {
+    pub fn parse_time_range(&self) -> anyhow::Result<Option<jiff::SignedDuration>> {
         let Some(ref raw) = self.time_range else {
             return Ok(None);
         };
@@ -158,10 +158,10 @@ impl LogsArgs {
             .map_err(|_| anyhow::anyhow!("invalid --time-range value: '{raw}'"))?;
 
         let duration = match suffix {
-            "s" | "" => chrono::Duration::seconds(n),
-            "m" => chrono::Duration::minutes(n),
-            "h" => chrono::Duration::hours(n),
-            "d" => chrono::Duration::days(n),
+            "s" | "" => jiff::SignedDuration::from_secs(n),
+            "m" => jiff::SignedDuration::from_secs(n * 60),
+            "h" => jiff::SignedDuration::from_secs(n * 3600),
+            "d" => jiff::SignedDuration::from_secs(n * 86400),
             _ => anyhow::bail!("unknown --time-range suffix '{suffix}' in '{raw}' (use s/m/h/d)"),
         };
 
@@ -328,7 +328,7 @@ mod tests {
             format: FormatArg::Json,
         };
         let dur = args.parse_time_range().unwrap().unwrap();
-        assert_eq!(dur.num_minutes(), 15);
+        assert_eq!(dur.as_secs() / 60, 15);
     }
 
     #[test]
@@ -349,7 +349,7 @@ mod tests {
             format: FormatArg::Json,
         };
         let dur = args.parse_time_range().unwrap().unwrap();
-        assert_eq!(dur.num_hours(), 6);
+        assert_eq!(dur.as_secs() / 3600, 6);
     }
 
     #[test]
