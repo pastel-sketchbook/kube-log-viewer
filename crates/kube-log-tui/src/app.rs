@@ -1084,6 +1084,7 @@ impl App {
                 &pod,
                 container.as_deref(),
                 cancel_rx,
+                &k8s::logs::LogStreamConfig::default(),
             )
             .await
             {

@@ -16,7 +16,7 @@ use kube_log_core::classify::Classifier;
 use kube_log_core::export;
 use kube_log_core::filter;
 use kube_log_core::k8s;
-use kube_log_core::k8s::logs::LogStreamItem;
+use kube_log_core::k8s::logs::{LogStreamConfig, LogStreamItem};
 use kube_log_core::reduce;
 use kube_log_core::types::{ClassifiedLine, FilterConfig, PipelineOutput, PodSummary};
 
@@ -216,17 +216,32 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
         };
 
         for container in &container_targets {
+            // Build the stream config for batch mode: no follow, server-side
+            // tail/time filtering so we don't download the full log history.
+            let stream_config = LogStreamConfig {
+                follow: false,
+                tail_lines: Some(args.lines),
+                since_seconds: time_range.map(|dur| dur.as_secs()),
+                timestamps: true,
+            };
+
             // Stream logs with a cancellation channel.
             let (cancel_tx, cancel_rx) = watch::channel(false);
-            let mut stream =
-                k8s::logs::stream_logs(&context, &namespace, pod_name, *container, cancel_rx)
-                    .await
-                    .with_context(|| match container {
-                        Some(c) => format!(
-                            "failed to start log stream for pod '{pod_name}' container '{c}'"
-                        ),
-                        None => format!("failed to start log stream for pod '{pod_name}'"),
-                    })?;
+            let mut stream = k8s::logs::stream_logs(
+                &context,
+                &namespace,
+                pod_name,
+                *container,
+                cancel_rx,
+                &stream_config,
+            )
+            .await
+            .with_context(|| match container {
+                Some(c) => format!(
+                    "failed to start log stream for pod '{pod_name}' container '{c}'"
+                ),
+                None => format!("failed to start log stream for pod '{pod_name}'"),
+            })?;
 
             let mut line_count: u64 = 0;
             let max_lines = args.lines as u64;
@@ -373,10 +388,18 @@ async fn run_logs_follow(
         Some(containers[0].as_str())
     };
 
+    let follow_config = LogStreamConfig {
+        follow: true,
+        tail_lines: Some(args.lines),
+        since_seconds: time_range.map(|dur| dur.as_secs()),
+        timestamps: true,
+    };
+
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let mut stream = k8s::logs::stream_logs(context, namespace, pod_name, container, cancel_rx)
-        .await
-        .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
+    let mut stream =
+        k8s::logs::stream_logs(context, namespace, pod_name, container, cancel_rx, &follow_config)
+            .await
+            .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
 
     // Install ctrl-c handler to cancel the stream gracefully.
     let cancel_tx_clone = cancel_tx.clone();

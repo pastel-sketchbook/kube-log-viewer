@@ -18,6 +18,40 @@ pub enum LogStreamItem {
     Error(String),
 }
 
+/// Configuration for a log stream request.
+///
+/// Controls the K8s `LogParams` sent to the API server so callers can
+/// choose between follow (TUI) and batch (CLI) modes.
+#[derive(Debug, Clone)]
+pub struct LogStreamConfig {
+    /// Whether to keep the connection open for new lines (`true` for TUI /
+    /// CLI follow mode, `false` for CLI batch mode).
+    pub follow: bool,
+
+    /// Number of most-recent lines to return from the API server.
+    /// `None` means no limit (the API default).
+    pub tail_lines: Option<i64>,
+
+    /// Only return log lines newer than this many seconds ago.
+    /// Server-side filtering — avoids downloading the full log history.
+    pub since_seconds: Option<i64>,
+
+    /// Prepend a K8s-generated RFC 3339 timestamp to each log line.
+    pub timestamps: bool,
+}
+
+impl Default for LogStreamConfig {
+    /// TUI default: follow mode, last 100 lines, timestamps enabled.
+    fn default() -> Self {
+        Self {
+            follow: true,
+            tail_lines: Some(100),
+            since_seconds: None,
+            timestamps: true,
+        }
+    }
+}
+
 /// Connect to a pod and return a stream of log items.
 ///
 /// The returned stream yields [`LogStreamItem::Line`] for each log line and
@@ -27,15 +61,16 @@ pub enum LogStreamItem {
 ///
 /// Setup errors (bad context, unreachable API server, etc.) are returned as
 /// `Err(...)` before any stream item is produced.
-#[instrument(skip(cancel_rx), fields(context, namespace, pod_name, container))]
+#[instrument(skip(cancel_rx, config), fields(context, namespace, pod_name, container))]
 pub async fn stream_logs(
     context: &str,
     namespace: &str,
     pod_name: &str,
     container: Option<&str>,
     cancel_rx: watch::Receiver<bool>,
+    config: &LogStreamConfig,
 ) -> Result<UnboundedReceiverStream<LogStreamItem>> {
-    info!("starting log stream");
+    info!(follow = config.follow, tail_lines = ?config.tail_lines, since_seconds = ?config.since_seconds, "starting log stream");
 
     let client = create_client(Some(context))
         .await
@@ -43,10 +78,11 @@ pub async fn stream_logs(
     let pod_api: Api<Pod> = Api::namespaced(client, namespace);
 
     let params = LogParams {
-        follow: true,
-        tail_lines: Some(100),
-        timestamps: true,
+        follow: config.follow,
+        tail_lines: config.tail_lines,
+        timestamps: config.timestamps,
         container: container.map(|s| s.to_string()),
+        since_seconds: config.since_seconds,
         ..Default::default()
     };
 
