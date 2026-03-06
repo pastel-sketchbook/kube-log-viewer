@@ -1,0 +1,18 @@
+[package]
+name = "kube-log-core"
+version = "0.5.0"
+edition = "2024"
+description = "Shared library for Kubernetes log fetching, streaming, and parsing"
+
+[dependencies]
+anyhow = "1.0.102"
+chrono = { version = "0.4.44", features = ["serde"] }
+futures = "0.3.32"
+k8s-openapi = { version = "0.27.1", features = ["v1_32"] }
+kube = { version = "3.0.1", features = ["client", "config", "runtime", "rustls-tls"] }
+regex = "1.12.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+tokio = { version = "1.50.0", features = ["full"] }
+tokio-stream = "0.1.18"
+tracing = "0.1.44"

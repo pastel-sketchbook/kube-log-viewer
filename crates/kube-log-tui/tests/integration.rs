@@ -3,9 +3,9 @@
 //! and multi-step flows (context switch → namespace load → pod load).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use kube_log_viewer::app::{App, Focus, InputMode, PopupKind};
-use kube_log_viewer::event::AppEvent;
-use kube_log_viewer::k8s::pods::PodInfo;
+use kube_log_core::k8s::pods::PodInfo;
+use kube_log_tui::app::{App, Focus, InputMode, PopupKind};
+use kube_log_tui::event::AppEvent;
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------

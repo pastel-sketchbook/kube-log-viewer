@@ -10,10 +10,10 @@ use tokio::sync::{mpsc, watch};
 use tracing::{debug, error, info};
 
 use crate::event::AppEvent;
-use crate::k8s;
 use crate::prefs;
 use crate::ui;
 use crate::ui::theme::{THEMES, Theme};
+use kube_log_core::k8s;
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -158,14 +158,32 @@ pub enum StreamMode {
     Split,
 }
 
+/// Per-pane TUI view state for a log stream in split mode.
+#[derive(Debug, Clone)]
+pub struct LogViewState {
+    pub scroll_offset: usize,
+    pub follow_mode: bool,
+}
+
+impl Default for LogViewState {
+    fn default() -> Self {
+        Self {
+            scroll_offset: 0,
+            follow_mode: true,
+        }
+    }
+}
+
 /// Handle to a running log stream background task.
+///
+/// Domain fields (`pod_name`, `container`, `cancel_tx`) identify and control
+/// the stream. TUI-specific per-pane state lives in [`LogViewState`].
 pub struct LogStreamHandle {
     pub pod_name: String,
     pub container: Option<String>,
     pub cancel_tx: tokio::sync::watch::Sender<bool>,
-    // Per-pane scroll state (used in split mode)
-    pub scroll_offset: usize,
-    pub follow_mode: bool,
+    /// Per-pane TUI view state (scroll position, follow mode).
+    pub view: LogViewState,
 }
 
 impl std::fmt::Debug for LogStreamHandle {
@@ -173,8 +191,7 @@ impl std::fmt::Debug for LogStreamHandle {
         f.debug_struct("LogStreamHandle")
             .field("pod_name", &self.pod_name)
             .field("container", &self.container)
-            .field("scroll_offset", &self.scroll_offset)
-            .field("follow_mode", &self.follow_mode)
+            .field("view", &self.view)
             .finish()
     }
 }
@@ -375,7 +392,7 @@ impl App {
             KeyCode::Char('f') => {
                 if self.stream_mode == StreamMode::Split {
                     if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                        handle.follow_mode = !handle.follow_mode;
+                        handle.view.follow_mode = !handle.view.follow_mode;
                     }
                 } else {
                     self.follow_mode = !self.follow_mode;
@@ -485,8 +502,8 @@ impl App {
             }
             (Focus::Logs, StreamMode::Split) => {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.follow_mode = false;
-                    handle.scroll_offset = handle.scroll_offset.saturating_sub(1);
+                    handle.view.follow_mode = false;
+                    handle.view.scroll_offset = handle.view.scroll_offset.saturating_sub(1);
                 }
             }
             (Focus::Logs, _) => {
@@ -511,9 +528,9 @@ impl App {
                     .len()
                     .saturating_sub(1);
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.follow_mode = false;
-                    if handle.scroll_offset < max {
-                        handle.scroll_offset += 1;
+                    handle.view.follow_mode = false;
+                    if handle.view.scroll_offset < max {
+                        handle.view.scroll_offset += 1;
                     }
                 }
             }
@@ -536,8 +553,8 @@ impl App {
                     .len()
                     .saturating_sub(1);
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.follow_mode = true;
-                    handle.scroll_offset = max;
+                    handle.view.follow_mode = true;
+                    handle.view.scroll_offset = max;
                 }
             }
             (Focus::Logs, _) => {
@@ -552,8 +569,8 @@ impl App {
             (Focus::Pods, _) => {}
             (Focus::Logs, StreamMode::Split) => {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.follow_mode = false;
-                    handle.scroll_offset = 0;
+                    handle.view.follow_mode = false;
+                    handle.view.scroll_offset = 0;
                 }
             }
             (Focus::Logs, _) => {
@@ -575,8 +592,8 @@ impl App {
             (Focus::Pods, _) => {}
             (Focus::Logs, StreamMode::Split) => {
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.follow_mode = false;
-                    handle.scroll_offset = handle.scroll_offset.saturating_sub(page);
+                    handle.view.follow_mode = false;
+                    handle.view.scroll_offset = handle.view.scroll_offset.saturating_sub(page);
                 }
             }
             (Focus::Logs, _) => {
@@ -596,7 +613,7 @@ impl App {
                     .len()
                     .saturating_sub(1);
                 if let Some(handle) = self.streams.get_mut(self.active_pane) {
-                    handle.scroll_offset = (handle.scroll_offset + page).min(max);
+                    handle.view.scroll_offset = (handle.view.scroll_offset + page).min(max);
                 }
             }
             (Focus::Logs, _) => {
@@ -910,8 +927,8 @@ impl App {
                 }
                 // Time range filter
                 if let Some(cutoff_dt) = cutoff
-                    && let Some(m) = ui::logs::TIMESTAMP_RE.find(&tl.line)
-                    && let Some(dt) = ui::logs::parse_log_timestamp(&tl.line[..m.end()])
+                    && let Some(m) = kube_log_core::parse::TIMESTAMP_RE.find(&tl.line)
+                    && let Some(dt) = kube_log_core::parse::parse_log_timestamp(&tl.line[..m.end()])
                 {
                     return dt >= cutoff_dt;
                 }
@@ -926,9 +943,9 @@ impl App {
         // and stable sort preserves their relative arrival order.
         if self.stream_mode == StreamMode::Merged && self.streams.len() > 1 {
             lines.sort_by_cached_key(|tl| {
-                ui::logs::TIMESTAMP_RE
+                kube_log_core::parse::TIMESTAMP_RE
                     .find(&tl.line)
-                    .and_then(|m| ui::logs::parse_log_timestamp(&tl.line[..m.end()]))
+                    .and_then(|m| kube_log_core::parse::parse_log_timestamp(&tl.line[..m.end()]))
                     .unwrap_or(chrono::DateTime::<Utc>::MAX_UTC)
             });
         }
@@ -1006,7 +1023,24 @@ impl App {
         self.pod_watcher_cancel = Some(cancel_tx);
 
         tokio::spawn(async move {
-            k8s::pods::watch_pods(&context, &namespace, tx, cancel_rx).await;
+            match k8s::pods::watch_pods(&context, &namespace, cancel_rx).await {
+                Ok(mut stream) => {
+                    use futures::StreamExt as _;
+                    while let Some(item) = stream.next().await {
+                        let event = match item {
+                            k8s::pods::PodWatchItem::Updated(pods) => AppEvent::PodsUpdated(pods),
+                            k8s::pods::PodWatchItem::Error(e) => AppEvent::Error(e),
+                        };
+                        if tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to start pod watcher");
+                    let _ = tx.send(AppEvent::Error(format!("Failed to watch pods: {e:#}")));
+                }
+            }
         });
     }
 
@@ -1034,8 +1068,7 @@ impl App {
             pod_name: pod_name.to_string(),
             container: container.map(|s| s.to_string()),
             cancel_tx,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
 
         let tx = self.tx.clone();
@@ -1051,11 +1084,23 @@ impl App {
                 &pod,
                 container.as_deref(),
                 cancel_rx,
-                tx.clone(),
             )
             .await
             {
-                Ok(()) => {
+                Ok(mut stream) => {
+                    use futures::StreamExt as _;
+                    while let Some(item) = stream.next().await {
+                        let event = match item {
+                            k8s::logs::LogStreamItem::Line(text) => {
+                                AppEvent::LogLine(pod.clone(), text)
+                            }
+                            k8s::logs::LogStreamItem::Error(e) => AppEvent::Error(e),
+                        };
+                        if tx.send(event).is_err() {
+                            break;
+                        }
+                    }
+                    // Stream ended — notify the app.
                     let _ = tx.send(AppEvent::LogStreamEnded(pod));
                 }
                 Err(e) => {
@@ -2197,15 +2242,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
 
         app.stream_mode = StreamMode::Single;
@@ -2226,15 +2269,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.stream_mode = StreamMode::Merged;
 
@@ -2252,8 +2293,7 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
 
         app.remove_last_stream();
@@ -2269,15 +2309,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
 
         app.log_lines = vec![
@@ -2321,29 +2359,25 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-c".to_string(),
             container: None,
             cancel_tx: tx3,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-d".to_string(),
             container: None,
             cancel_tx: tx4,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.stream_mode = StreamMode::Split;
         assert_eq!(app.active_pane, 0);
@@ -2370,15 +2404,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.stream_mode = StreamMode::Split;
 
@@ -2405,17 +2437,16 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.stream_mode = StreamMode::Split;
         app.active_pane = 0;
 
-        assert!(app.streams[0].follow_mode);
+        assert!(app.streams[0].view.follow_mode);
         app.handle_key(key(KeyCode::Char('f')));
-        assert!(!app.streams[0].follow_mode);
+        assert!(!app.streams[0].view.follow_mode);
         app.handle_key(key(KeyCode::Char('f')));
-        assert!(app.streams[0].follow_mode);
+        assert!(app.streams[0].view.follow_mode);
     }
 
     #[test]
@@ -2427,15 +2458,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
 
         app.cancel_all_streams();
@@ -2501,15 +2530,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.stream_mode = StreamMode::Split;
         app.active_pane = 1; // pod-b
@@ -2537,8 +2564,7 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
 
         let meta = app.export_metadata();
@@ -2558,15 +2584,13 @@ mod tests {
             pod_name: "pod-a".to_string(),
             container: None,
             cancel_tx: tx1,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.streams.push(LogStreamHandle {
             pod_name: "pod-b".to_string(),
             container: None,
             cancel_tx: tx2,
-            scroll_offset: 0,
-            follow_mode: true,
+            view: LogViewState::default(),
         });
         app.stream_mode = StreamMode::Split;
         app.active_pane = 1;

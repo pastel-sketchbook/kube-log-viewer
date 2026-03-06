@@ -16,30 +16,30 @@ tasks:
     desc: "Build in debug mode"
     deps: [fmt]
     cmds:
-      - cargo build
+      - cargo build --workspace
 
   build:release:
     desc: "Build optimized release binary"
     deps: [check:all]
     cmds:
-      - cargo build --release
+      - cargo build --workspace --release
 
   check:
     desc: "Run fmt, cargo check, and clippy"
     deps: [fmt]
     cmds:
-      - cargo check --all-targets
-      - cargo clippy --all-targets -- -D warnings
+      - cargo check --workspace --all-targets
+      - cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     desc: "Run all tests"
     cmds:
-      - cargo test
+      - cargo test --workspace
 
   test:verbose:
     desc: "Run tests with output visible (--nocapture)"
     cmds:
-      - cargo test -- --nocapture
+      - cargo test --workspace -- --nocapture
 
   check:all:
     desc: "Run fmt, clippy, and tests"
@@ -52,19 +52,30 @@ tasks:
   run:
     desc: "Run kube-log-viewer"
     cmds:
-      - cargo run
+      - cargo run --package kube-log-tui
 
   run:release:
     desc: "Run kube-log-viewer (release build)"
     cmds:
-      - cargo run --release
+      - cargo run --package kube-log-tui --release
+
+  run:cli:
+    desc: "Run kube-log CLI"
+    cmds:
+      - cargo run --package kube-log-cli --
+
+  run:cli:release:
+    desc: "Run kube-log CLI (release build)"
+    cmds:
+      - cargo run --package kube-log-cli --release --
 
   # --- Install ---
   install:
-    desc: "Install kube-log-viewer to ~/.cargo/bin"
+    desc: "Install kube-log-viewer and kube-log to ~/.cargo/bin"
     deps: [check:all]
     cmds:
-      - cargo install --path . --force
+      - cargo install --path crates/kube-log-tui --force
+      - cargo install --path crates/kube-log-cli --force
 
   # --- Versioning ---
   version:patch:
@@ -72,10 +83,12 @@ tasks:
     cmds:
       - |
         set -e
-        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
-        sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
+          sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+        done
         cargo generate-lockfile
         echo "Bumped $CURRENT -> $NEXT"
 
@@ -84,10 +97,12 @@ tasks:
     cmds:
       - |
         set -e
-        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$MAJOR.$((MINOR + 1)).0"
-        sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
+          sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+        done
         cargo generate-lockfile
         echo "Bumped $CURRENT -> $NEXT"
 
@@ -96,10 +111,12 @@ tasks:
     cmds:
       - |
         set -e
-        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$((MAJOR + 1)).0.0"
-        sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" Cargo.toml
+        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
+          sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+        done
         cargo generate-lockfile
         echo "Bumped $CURRENT -> $NEXT"
 
@@ -108,7 +125,7 @@ tasks:
     cmds:
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
         git tag "v$VERSION"
         echo "Tagged v$VERSION"
 
@@ -119,8 +136,8 @@ tasks:
       - task: version:patch
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-        git add Cargo.toml Cargo.lock
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
+        git add crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml Cargo.lock
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
@@ -132,8 +149,8 @@ tasks:
       - task: version:minor
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-        git add Cargo.toml Cargo.lock
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
+        git add crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml Cargo.lock
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
@@ -145,8 +162,8 @@ tasks:
       - task: version:major
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-        git add Cargo.toml Cargo.lock
+        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
+        git add crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml Cargo.lock
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"

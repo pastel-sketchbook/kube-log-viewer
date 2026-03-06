@@ -1,4 +1,4 @@
-use crate::k8s::pods::PodInfo;
+use kube_log_core::k8s::pods::PodInfo;
 
 #[derive(Debug)]
 pub enum AppEvent {

@@ -6,7 +6,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use kube_log_viewer::app::App;
+use kube_log_tui::app::App;
 use ratatui::prelude::*;
 use tracing::info;
 
