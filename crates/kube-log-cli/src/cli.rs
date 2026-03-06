@@ -76,9 +76,12 @@ pub struct LogsArgs {
     #[arg(long, short = 'c')]
     pub container: Option<String>,
 
-    /// Number of recent lines to fetch per pod (default: 1000).
-    #[arg(long, default_value_t = 1000)]
-    pub lines: i64,
+    /// Number of recent lines to fetch per pod.
+    /// Defaults to 1000 when no --time-range is set.
+    /// When --time-range is set and --lines is not explicitly given,
+    /// the limit is removed so the time window controls the output.
+    #[arg(long)]
+    pub lines: Option<i64>,
 
     /// Stream logs continuously (JSON-lines to stdout).
     #[arg(long, short = 'f')]
@@ -114,6 +117,31 @@ pub struct LogsArgs {
 }
 
 impl LogsArgs {
+    /// Default line limit when no `--time-range` is specified.
+    const DEFAULT_LINES: i64 = 1000;
+
+    /// Resolve the effective `tail_lines` for the K8s API.
+    ///
+    /// - If `--lines` was explicitly set, always use it.
+    /// - If `--time-range` is set and `--lines` was NOT given, return `None`
+    ///   so the time window is the sole constraint.
+    /// - Otherwise fall back to [`Self::DEFAULT_LINES`].
+    pub fn effective_tail_lines(&self) -> Option<i64> {
+        match self.lines {
+            Some(n) => Some(n),
+            None if self.time_range.is_some() => None,
+            None => Some(Self::DEFAULT_LINES),
+        }
+    }
+
+    /// Resolve the effective client-side max lines cap.
+    ///
+    /// Returns `None` when the user did not explicitly set `--lines` and a
+    /// `--time-range` is present, meaning no client-side cap is applied.
+    pub fn effective_max_lines(&self) -> Option<u64> {
+        self.effective_tail_lines().map(|n| n as u64)
+    }
+
     /// Derive a [`FilterConfig`] from the CLI flags.
     pub fn filter_config(&self) -> FilterConfig {
         if self.all {
@@ -227,7 +255,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -250,7 +278,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -272,7 +300,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -294,7 +322,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -317,7 +345,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: Some("15m".into()),
             search: None,
@@ -338,7 +366,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: Some("6h".into()),
             search: None,
@@ -359,7 +387,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -379,7 +407,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: Some("15x".into()),
             search: None,
@@ -399,7 +427,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -419,7 +447,7 @@ mod tests {
             namespace: None,
             pod: vec![],
             container: None,
-            lines: 1000,
+            lines: None,
             follow: false,
             time_range: None,
             search: None,
@@ -430,5 +458,71 @@ mod tests {
             format: FormatArg::Jsonl,
         };
         assert_eq!(args.output_format(), OutputFormat::Jsonl);
+    }
+
+    #[test]
+    fn effective_tail_lines_defaults_to_1000_without_time_range() {
+        let args = LogsArgs {
+            context: None,
+            namespace: None,
+            pod: vec![],
+            container: None,
+            lines: None,
+            follow: false,
+            time_range: None,
+            search: None,
+            summary: false,
+            all: false,
+            verbose: false,
+            include: None,
+            format: FormatArg::Json,
+        };
+        assert_eq!(args.effective_tail_lines(), Some(LogsArgs::DEFAULT_LINES));
+        assert_eq!(
+            args.effective_max_lines(),
+            Some(LogsArgs::DEFAULT_LINES as u64)
+        );
+    }
+
+    #[test]
+    fn effective_tail_lines_none_when_time_range_set() {
+        let args = LogsArgs {
+            context: None,
+            namespace: None,
+            pod: vec![],
+            container: None,
+            lines: None,
+            follow: false,
+            time_range: Some("3d".into()),
+            search: None,
+            summary: false,
+            all: false,
+            verbose: false,
+            include: None,
+            format: FormatArg::Json,
+        };
+        assert_eq!(args.effective_tail_lines(), None);
+        assert_eq!(args.effective_max_lines(), None);
+    }
+
+    #[test]
+    fn explicit_lines_overrides_time_range() {
+        let args = LogsArgs {
+            context: None,
+            namespace: None,
+            pod: vec![],
+            container: None,
+            lines: Some(5000),
+            follow: false,
+            time_range: Some("3d".into()),
+            search: None,
+            summary: false,
+            all: false,
+            verbose: false,
+            include: None,
+            format: FormatArg::Json,
+        };
+        assert_eq!(args.effective_tail_lines(), Some(5000));
+        assert_eq!(args.effective_max_lines(), Some(5000));
     }
 }

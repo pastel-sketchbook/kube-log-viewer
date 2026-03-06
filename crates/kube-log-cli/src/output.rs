@@ -220,7 +220,7 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
             // tail/time filtering so we don't download the full log history.
             let stream_config = LogStreamConfig {
                 follow: false,
-                tail_lines: Some(args.lines),
+                tail_lines: args.effective_tail_lines(),
                 since_seconds: time_range.map(|dur| dur.as_secs()),
                 timestamps: true,
             };
@@ -244,7 +244,7 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
             })?;
 
             let mut line_count: u64 = 0;
-            let max_lines = args.lines as u64;
+            let max_lines = args.effective_max_lines();
 
             // Compute the cutoff timestamp for --time-range filtering.
             let cutoff = time_range.map(|dur| Timestamp::now() - dur);
@@ -272,7 +272,9 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
                         all_classified.push(classified);
                         line_count += 1;
 
-                        if line_count >= max_lines {
+                        if let Some(cap) = max_lines
+                            && line_count >= cap
+                        {
                             break;
                         }
                     }
@@ -390,7 +392,7 @@ async fn run_logs_follow(
 
     let follow_config = LogStreamConfig {
         follow: true,
-        tail_lines: Some(args.lines),
+        tail_lines: args.effective_tail_lines(),
         since_seconds: time_range.map(|dur| dur.as_secs()),
         timestamps: true,
     };
