@@ -237,9 +237,9 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
             )
             .await
             .with_context(|| match container {
-                Some(c) => format!(
-                    "failed to start log stream for pod '{pod_name}' container '{c}'"
-                ),
+                Some(c) => {
+                    format!("failed to start log stream for pod '{pod_name}' container '{c}'")
+                }
                 None => format!("failed to start log stream for pod '{pod_name}'"),
             })?;
 
@@ -396,10 +396,16 @@ async fn run_logs_follow(
     };
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
-    let mut stream =
-        k8s::logs::stream_logs(context, namespace, pod_name, container, cancel_rx, &follow_config)
-            .await
-            .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
+    let mut stream = k8s::logs::stream_logs(
+        context,
+        namespace,
+        pod_name,
+        container,
+        cancel_rx,
+        &follow_config,
+    )
+    .await
+    .with_context(|| format!("failed to start log stream for pod '{pod_name}'"))?;
 
     // Install ctrl-c handler to cancel the stream gracefully.
     let cancel_tx_clone = cancel_tx.clone();

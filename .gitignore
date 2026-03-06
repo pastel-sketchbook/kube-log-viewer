@@ -17,3 +17,6 @@ Thumbs.db
 
 # Local skill/reference files (not committed)
 .skills/
+
+# Local scripts (ad-hoc, not committed)
+scripts/

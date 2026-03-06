@@ -4,10 +4,11 @@
 //! [`LineClass`] and produces a [`ClassifiedLine`]. Classification rules are
 //! applied in priority order (see ADR-0007 §2):
 //!
-//! 1. **Error** — `ERROR`, `FATAL`, `PANIC`, HTTP 5xx
+//! 1. **Error** — `ERROR`, `FATAL`, `PANIC`, HTTP 5xx, non-empty JSON `error` field
 //! 2. **Warning** — `WARN`, `TIMEOUT`, `retry`, HTTP 4xx
-//! 3. **Lifecycle** — `started`, `ready`, `shutdown`, `SIGTERM`, `pulling image`
-//! 4. **HealthCheck** — `kube-probe`, `/healthz`, `/readyz`, `/livez`
+//! 3. **HealthCheck** — `kube-probe`, `/healthz`, `/readyz`, `/livez` (also inspects
+//!    JSON `user_agent`, `uri`, `path` fields)
+//! 4. **Lifecycle** — `started`, `ready`, `shutdown`, `SIGTERM`, `pulling image`
 //! 5. **Repeated** — structural dedup (normalize timestamps/UUIDs/IPs/numbers)
 //! 6. **Novel** — first-seen canonical form
 //! 7. **Normal** — everything else
@@ -166,14 +167,27 @@ impl Classifier {
         // Try to extract structured fields from JSON.
         let (level, msg, fields) = extract_json_fields(raw);
 
-        // The text to classify: prefer the message field, fall back to raw.
-        let classify_text = msg.as_deref().unwrap_or(raw);
+        // Build the text to classify. For JSON lines, we construct a string
+        // from the message + field *values* (not keys) so that JSON key names
+        // like `"error":""` don't inject false keywords. For non-JSON lines,
+        // fall back to the raw text.
+        let classify_text_owned: Option<String>;
+        let classify_text: &str = if let Some(ref m) = msg {
+            m.as_str()
+        } else if let Some(ref f) = fields {
+            // No msg field — build classify text from field values only.
+            classify_text_owned = Some(build_classify_text_from_fields(f));
+            classify_text_owned.as_deref().unwrap_or(raw)
+        } else {
+            raw
+        };
 
         // Determine the level string: from JSON extraction or from raw text.
-        let level = level.or_else(|| detect_level_from_text(raw));
+        let level = level.or_else(|| detect_level_from_text(classify_text));
 
-        // Classify in priority order.
-        let class = self.classify_text(classify_text, raw);
+        // Classify in priority order, passing structured fields and level for
+        // JSON-aware detection.
+        let class = self.classify_content(classify_text, raw, fields.as_ref(), level.as_deref());
 
         ClassifiedLine {
             timestamp,
@@ -188,22 +202,34 @@ impl Classifier {
     }
 
     /// Core classification logic applied to the message text.
-    fn classify_text(&mut self, text: &str, raw: &str) -> LineClass {
+    ///
+    /// `json_fields` is `Some` when the line is structured JSON, enabling
+    /// field-level inspection (e.g. `user_agent` for health check detection,
+    /// `error` field content for error detection). `level` is the extracted
+    /// log level (e.g. `"ERROR"`, `"WARN"`) from JSON or text detection.
+    fn classify_content(
+        &mut self,
+        text: &str,
+        raw: &str,
+        json_fields: Option<&serde_json::Map<String, Value>>,
+        level: Option<&str>,
+    ) -> LineClass {
         let upper = text.to_uppercase();
 
-        // 1. Error detection
-        if is_error(&upper, text) {
+        // 1. Error detection — check extracted level, text content, and JSON `error` field
+        if is_error_level(level) || is_error(&upper, text) || has_json_error_content(json_fields) {
             return LineClass::Error;
         }
 
-        // 2. Warning detection
-        if is_warning(&upper, text) {
+        // 2. Warning detection — check extracted level and text content
+        if is_warning_level(level) || is_warning(&upper, text) {
             return LineClass::Warning;
         }
 
         // 3. Health check detection (before lifecycle, because health check
-        //    URLs like `/readyz` contain lifecycle words like "ready")
-        if is_healthcheck(text) {
+        //    URLs like `/readyz` contain lifecycle words like "ready").
+        //    Also inspect JSON fields like `user_agent` and `uri`.
+        if is_healthcheck(text) || is_json_healthcheck(json_fields) {
             return LineClass::HealthCheck;
         }
 
@@ -257,6 +283,19 @@ impl Default for Classifier {
 // Classification helpers
 // ---------------------------------------------------------------------------
 
+/// Check if the extracted log level indicates an error.
+fn is_error_level(level: Option<&str>) -> bool {
+    matches!(
+        level,
+        Some("ERROR" | "FATAL" | "PANIC" | "CRITICAL" | "CRIT")
+    )
+}
+
+/// Check if the extracted log level indicates a warning.
+fn is_warning_level(level: Option<&str>) -> bool {
+    matches!(level, Some("WARN" | "WARNING"))
+}
+
 /// Check if the line indicates an error.
 fn is_error(upper: &str, original: &str) -> bool {
     // Keyword match (uppercased)
@@ -271,10 +310,9 @@ fn is_error(upper: &str, original: &str) -> bool {
             return true;
         }
     }
-    // HTTP 5xx (but not in timestamps or other numeric contexts — check
-    // that the match isn't part of a larger number context by requiring
-    // it to appear with "status" or "HTTP" nearby, or as a standalone).
-    if HTTP_5XX_RE.is_match(original) && has_http_context(original) {
+    // HTTP 5xx (but not version numbers like AppleWebKit/537.36 — validated
+    // by has_real_http_status which rejects matches followed by ".<digit>").
+    if has_real_http_status(&HTTP_5XX_RE, original) && has_http_context(original) {
         return true;
     }
     false
@@ -292,7 +330,7 @@ fn is_warning(upper: &str, original: &str) -> bool {
             return true;
         }
     }
-    if HTTP_4XX_RE.is_match(original) && has_http_context(original) {
+    if has_real_http_status(&HTTP_4XX_RE, original) && has_http_context(original) {
         return true;
     }
     false
@@ -307,6 +345,26 @@ fn has_http_context(text: &str) -> bool {
         || lower.contains("status_code")
         || lower.contains("status=")
         || lower.contains("code=")
+}
+
+/// Check if a regex matches a genuine HTTP status code (not a version number).
+///
+/// Returns `true` if at least one regex match is NOT immediately followed by
+/// `.\d` (which would indicate a version number like `537.36` or `403.2`).
+/// This replaces lookahead `(?!\.\d)` which the `regex` crate does not support.
+fn has_real_http_status(re: &Regex, text: &str) -> bool {
+    let bytes = text.as_bytes();
+    for m in re.find_iter(text) {
+        let end = m.end();
+        // Check: is this match followed by ".<digit>"?
+        if end + 1 < bytes.len() && bytes[end] == b'.' && bytes[end + 1].is_ascii_digit() {
+            // This is a version number like "537.36" — skip it.
+            continue;
+        }
+        // Genuine status code match.
+        return true;
+    }
+    false
 }
 
 /// Check if the line indicates a lifecycle/state transition.
@@ -328,6 +386,85 @@ fn is_healthcheck(text: &str) -> bool {
         }
     }
     false
+}
+
+/// Well-known JSON field names that may contain health check indicators.
+const HEALTHCHECK_FIELD_KEYS: &[&str] = &[
+    "user_agent",
+    "useragent",
+    "user-agent",
+    "uri",
+    "path",
+    "url",
+    "request_uri",
+    "request_path",
+];
+
+/// Check if JSON fields indicate a health check (e.g. `user_agent` contains
+/// `kube-probe` or `uri` contains `/healthz`).
+fn is_json_healthcheck(fields: Option<&serde_json::Map<String, Value>>) -> bool {
+    let fields = match fields {
+        Some(f) => f,
+        None => return false,
+    };
+
+    for (key, val) in fields {
+        let key_lower = key.to_lowercase();
+        if !HEALTHCHECK_FIELD_KEYS.contains(&key_lower.as_str()) {
+            continue;
+        }
+        if let Some(s) = val.as_str() {
+            let lower = s.to_lowercase();
+            for pat in HEALTHCHECK_PATTERNS {
+                if lower.contains(pat) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+/// Check if a JSON `error` field has non-empty, meaningful content.
+///
+/// Returns `true` only when the JSON contains an `error` field with a
+/// non-empty string value that isn't just whitespace. An empty `"error":""`
+/// (common in access logs for successful requests) is NOT an error indicator.
+fn has_json_error_content(fields: Option<&serde_json::Map<String, Value>>) -> bool {
+    let fields = match fields {
+        Some(f) => f,
+        None => return false,
+    };
+
+    for (key, val) in fields {
+        if key.eq_ignore_ascii_case("error") || key.eq_ignore_ascii_case("err") {
+            match val {
+                Value::String(s) => return !s.trim().is_empty(),
+                Value::Null => return false,
+                // A non-string, non-null value in an error field (e.g. an object
+                // with error details) is considered meaningful.
+                _ => return true,
+            }
+        }
+    }
+    false
+}
+
+/// Build a classify text from JSON field values (excluding keys).
+///
+/// When a JSON line has no `msg`/`message` field, we construct a text string
+/// from the field **values** only. This prevents JSON key names like `"error"`
+/// from injecting false classification keywords.
+fn build_classify_text_from_fields(fields: &serde_json::Map<String, Value>) -> String {
+    let mut parts = Vec::new();
+    for val in fields.values() {
+        match val {
+            Value::String(s) if !s.is_empty() => parts.push(s.as_str()),
+            _ => {}
+        }
+    }
+    parts.join(" ")
 }
 
 /// Try to detect log level from the raw text (non-JSON lines).
@@ -778,5 +915,228 @@ mod tests {
             Some("DEBUG".to_string())
         );
         assert_eq!(detect_level_from_text("no level here"), None);
+    }
+
+    // -- JSON health check / error field classification ---------------------
+
+    #[test]
+    fn test_json_empty_error_field_not_classified_as_error() {
+        // A JSON access log with `"error":""` should NOT be classified as error.
+        // This is the core bug: the empty error field was triggering error detection
+        // when the raw JSON string was used as classify text.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:00:00Z","method":"GET","uri":"/api/status","status":200,"error":"","latency":"1ms"}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_ne!(
+            result.class,
+            LineClass::Error,
+            "empty error field should not trigger error classification"
+        );
+    }
+
+    #[test]
+    fn test_json_nonempty_error_field_classified_as_error() {
+        // A JSON line with a non-empty `error` field should be classified as error.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:00:00Z","method":"POST","uri":"/api/data","status":500,"error":"connection refused","latency":"5ms"}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::Error,
+            "non-empty error field should trigger error classification"
+        );
+    }
+
+    #[test]
+    fn test_json_healthcheck_kube_probe_user_agent() {
+        // A JSON access log with `"user_agent":"kube-probe/1.28"` should be
+        // classified as health check, even if there's no health check URL.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:00:00Z","method":"GET","uri":"/miapi/isHealthy","user_agent":"kube-probe/1.28","status":200,"error":"","latency":"0.5ms"}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "kube-probe user_agent should trigger health check classification"
+        );
+    }
+
+    #[test]
+    fn test_json_healthcheck_uri_healthz() {
+        // A JSON access log with `"uri":"/healthz"` should be classified as health check.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:00:00Z","method":"GET","uri":"/healthz","status":200,"error":"","latency":"0.3ms"}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "healthz URI in JSON should trigger health check classification"
+        );
+    }
+
+    #[test]
+    fn test_json_healthcheck_path_readyz() {
+        // A JSON access log with `"path":"/readyz"` should be classified as health check.
+        let mut c = Classifier::new();
+        let line =
+            r#"{"time":"2026-03-06T10:00:00Z","method":"GET","path":"/readyz","status":200}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "readyz path in JSON should trigger health check classification"
+        );
+    }
+
+    #[test]
+    fn test_json_healthcheck_full_access_log() {
+        // Realistic health check access log from a live cluster: has `kube-probe`
+        // user agent, `/miapi/isHealthy` URI, empty error field, status 200.
+        // This is the exact pattern that was misclassified as Error before the fix.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:15:23.600Z","id":"abc-def-123","remote_ip":"10.0.0.1","host":"10.0.0.2:8080","method":"GET","uri":"/miapi/isHealthy","user_agent":"kube-probe/1.28","status":200,"error":"","latency":536818,"latency_human":"536.818µs","bytes_in":0,"bytes_out":19}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "realistic kube-probe access log should be classified as health check, not error"
+        );
+    }
+
+    #[test]
+    fn test_json_null_error_field_not_classified_as_error() {
+        // A JSON line with `"error":null` should NOT trigger error classification.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:00:00Z","method":"GET","uri":"/api/data","status":200,"error":null}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_ne!(
+            result.class,
+            LineClass::Error,
+            "null error field should not trigger error classification"
+        );
+    }
+
+    #[test]
+    fn test_json_error_object_field_classified_as_error() {
+        // A JSON line with an `error` field containing an object (error details)
+        // should be classified as error.
+        let mut c = Classifier::new();
+        let line = r#"{"time":"2026-03-06T10:00:00Z","error":{"code":"ECONNREFUSED","message":"connection refused"}}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::Error,
+            "error object field should trigger error classification"
+        );
+    }
+
+    #[test]
+    fn test_json_whitespace_error_field_not_classified_as_error() {
+        // A JSON line with `"error":"  "` (whitespace only) should NOT be an error.
+        let mut c = Classifier::new();
+        let line =
+            r#"{"time":"2026-03-06T10:00:00Z","method":"GET","uri":"/api/data","error":"  "}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_ne!(
+            result.class,
+            LineClass::Error,
+            "whitespace-only error field should not trigger error classification"
+        );
+    }
+
+    #[test]
+    fn test_json_with_msg_still_classifies_on_msg() {
+        // When a JSON line has a `msg` field, classification should still use the msg
+        // content (not field values), so ERROR in msg triggers error detection.
+        let mut c = Classifier::new();
+        let line = r#"{"level":"error","msg":"database connection failed","status":500}"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(result.class, LineClass::Error);
+        assert_eq!(result.level.as_deref(), Some("ERROR"));
+    }
+
+    // -----------------------------------------------------------------------
+    // HTTP status code regex: version-number false positive tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_5xx_regex_ignores_applewebkit_version() {
+        // AppleWebKit/537.36 should NOT match as HTTP 5xx because "537" is
+        // followed by ".3" (a version decimal).
+        let mut c = Classifier::new();
+        let line = r#"10.0.0.1 - - [06/Mar/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 612 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36""#;
+        let result = c.classify(line, "nginx-pod", None);
+        assert_ne!(
+            result.class,
+            LineClass::Error,
+            "AppleWebKit/537.36 should not trigger HTTP 5xx error detection"
+        );
+    }
+
+    #[test]
+    fn test_4xx_regex_ignores_version_number() {
+        // A version like "module/403.2" should NOT match as HTTP 4xx because
+        // "403" is followed by ".2".
+        let mut c = Classifier::new();
+        let line = r#"10.0.0.1 - - [06/Mar/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 100 "-" "CustomAgent/403.2""#;
+        let result = c.classify(line, "nginx-pod", None);
+        assert_ne!(
+            result.class,
+            LineClass::Warning,
+            "version number 403.2 should not trigger HTTP 4xx warning detection"
+        );
+    }
+
+    #[test]
+    fn test_real_5xx_status_still_detected() {
+        // A genuine HTTP 503 in an nginx access log should still be detected as error.
+        let mut c = Classifier::new();
+        let line = r#"10.0.0.1 - - [06/Mar/2026:12:00:00 +0000] "GET /api HTTP/1.1" 503 0 "-" "Mozilla/5.0 AppleWebKit/537.36""#;
+        let result = c.classify(line, "nginx-pod", None);
+        assert_eq!(
+            result.class,
+            LineClass::Error,
+            "genuine HTTP 503 should still be classified as error even with AppleWebKit/537.36 in the same line"
+        );
+    }
+
+    #[test]
+    fn test_real_4xx_status_still_detected() {
+        // A genuine HTTP 404 in an nginx access log should still be detected as warning.
+        let mut c = Classifier::new();
+        let line = r#"10.0.0.1 - - [06/Mar/2026:12:00:00 +0000] "GET /missing HTTP/1.1" 404 0 "-" "curl/8.0""#;
+        let result = c.classify(line, "nginx-pod", None);
+        assert_eq!(
+            result.class,
+            LineClass::Warning,
+            "genuine HTTP 404 should still be classified as warning"
+        );
+    }
+
+    #[test]
+    fn test_nginx_200_with_chrome_useragent_not_error() {
+        // Realistic nginx access log: HTTP 200 with full Chrome user agent.
+        // This is the exact pattern that caused 106 false errors on-prem.
+        let mut c = Classifier::new();
+        let line = r#"192.168.1.50 - user [06/Mar/2026:14:30:00 +0000] "GET /dashboard HTTP/1.1" 200 8432 "https://example.com/" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36""#;
+        let result = c.classify(line, "ingress-nginx", None);
+        assert_ne!(
+            result.class,
+            LineClass::Error,
+            "HTTP 200 nginx access log with Chrome user agent must not be classified as error"
+        );
+    }
+
+    #[test]
+    fn test_nginx_304_with_safari_useragent_not_error() {
+        // HTTP 304 with Safari user agent — another common false positive pattern.
+        let mut c = Classifier::new();
+        let line = r#"10.0.0.1 - - [06/Mar/2026:14:30:00 +0000] "GET /static/app.js HTTP/1.1" 304 0 "-" "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Version/17.0 Safari/537.36""#;
+        let result = c.classify(line, "ingress-nginx", None);
+        assert_ne!(
+            result.class,
+            LineClass::Error,
+            "HTTP 304 nginx access log with Safari user agent must not be classified as error"
+        );
     }
 }

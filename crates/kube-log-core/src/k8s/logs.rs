@@ -61,7 +61,10 @@ impl Default for LogStreamConfig {
 ///
 /// Setup errors (bad context, unreachable API server, etc.) are returned as
 /// `Err(...)` before any stream item is produced.
-#[instrument(skip(cancel_rx, config), fields(context, namespace, pod_name, container))]
+#[instrument(
+    skip(cancel_rx, config),
+    fields(context, namespace, pod_name, container)
+)]
 pub async fn stream_logs(
     context: &str,
     namespace: &str,
