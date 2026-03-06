@@ -48,6 +48,24 @@ fn resolve_namespace(explicit: &Option<String>) -> String {
 // logs subcommand
 // ---------------------------------------------------------------------------
 
+/// Suggest namespaces similar to `input` by substring matching.
+///
+/// Returns namespaces where either the input is a substring of the namespace
+/// or the namespace is a substring of the input (covers prefix/suffix typos).
+async fn suggest_namespaces(context: &str, input: &str) -> Vec<String> {
+    let Ok(all_ns) = k8s::namespaces::list_namespaces(context).await else {
+        return Vec::new();
+    };
+    let lower = input.to_lowercase();
+    all_ns
+        .into_iter()
+        .filter(|ns| {
+            let ns_lower = ns.to_lowercase();
+            ns_lower.contains(&lower) || lower.contains(&ns_lower)
+        })
+        .collect()
+}
+
 /// Execute the `logs` subcommand: fetch → classify → filter → reduce → export.
 pub async fn run_logs(args: LogsArgs) -> Result<()> {
     let context = resolve_context(&args.context)?;
@@ -65,7 +83,15 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
                 format!("failed to list pods in namespace '{namespace}' (context '{context}')")
             })?;
         if pods.is_empty() {
-            bail!("no pods found in namespace '{namespace}' (context '{context}')");
+            let suggestions = suggest_namespaces(&context, &namespace).await;
+            if suggestions.is_empty() {
+                bail!("no pods found in namespace '{namespace}' (context '{context}')");
+            } else {
+                bail!(
+                    "no pods found in namespace '{namespace}' (context '{context}'). Did you mean: {}",
+                    suggestions.join(", ")
+                );
+            }
         }
         pods.iter().map(|p| p.name.clone()).collect()
     } else {
