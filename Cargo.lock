@@ -1076,7 +1076,7 @@ dependencies = [
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "kube-log-cli"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -1257,7 +1257,7 @@ dependencies = [
 
 [[package]]
 name = "kube-log-core"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "futures",
@@ -1274,7 +1274,7 @@ dependencies = [
 
 [[package]]
 name = "kube-log-tui"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "crossterm",

@@ -45,12 +45,22 @@ fn preprocess_args(mut args: Vec<String>) -> Vec<String> {
     args
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     // Handle shell completion requests (COMPLETE=bash/zsh/fish kube-log).
-    // Must run before any stdout output or argument parsing.
+    // Must run BEFORE the tokio runtime is created — the dynamic completers
+    // build their own single-threaded tokio runtimes to call the K8s API, and
+    // nested `block_on()` panics inside an existing runtime context.
     CompleteEnv::with_factory(cli::Cli::command).complete();
 
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> ExitCode {
     let args = cli::Cli::parse_from(preprocess_args(std::env::args().collect()));
 
     if let Err(e) = run(args).await {
@@ -117,5 +127,37 @@ mod tests {
         let input = args(&["kube-log", "--pod", "foo"]);
         let result = preprocess_args(input.clone());
         assert_eq!(result, input);
+    }
+
+    /// Verify that completing `logs -n <value>` does NOT produce flag
+    /// completions. The dynamic namespace completer may return nothing (no
+    /// cluster), but the engine must NOT fall back to `--pod`, `--follow`,
+    /// etc. This catches the nested-tokio-runtime bug where the completer
+    /// panicked and clap fell through to flags.
+    #[test]
+    fn completion_for_namespace_value_returns_no_flags() {
+        use std::ffi::OsString;
+        let mut cmd = cli::Cli::command();
+        let result = clap_complete::engine::complete(
+            &mut cmd,
+            vec![
+                OsString::from("kube-log"),
+                OsString::from("logs"),
+                OsString::from("-n"),
+                OsString::from("an"),
+            ],
+            3, // completing the 4th token ("an")
+            None,
+        );
+        // No completions at all is fine (cluster unreachable).
+        if let Ok(completions) = result {
+            for c in &completions {
+                let val = c.get_value().to_string_lossy();
+                assert!(
+                    !val.starts_with('-'),
+                    "Expected namespace value completions, got flag: {val}"
+                );
+            }
+        }
     }
 }

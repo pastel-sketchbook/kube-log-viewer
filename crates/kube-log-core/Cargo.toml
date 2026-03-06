@@ -1,6 +1,6 @@
 [package]
 name = "kube-log-core"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 description = "Shared library for Kubernetes log fetching, streaming, and parsing"
 
