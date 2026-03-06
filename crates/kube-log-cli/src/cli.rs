@@ -68,7 +68,7 @@ pub struct LogsArgs {
     #[arg(long, short = 'n', add = ArgValueCompleter::new(complete::namespace_completer))]
     pub namespace: Option<String>,
 
-    /// Pod name (required). Can be repeated for multi-pod analysis.
+    /// Pod name(s). Omit to analyze all pods in the namespace.
     #[arg(long, short = 'p', required = false, add = ArgValueCompleter::new(complete::pod_completer))]
     pub pod: Vec<String>,
 

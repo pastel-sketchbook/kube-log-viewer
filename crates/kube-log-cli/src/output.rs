@@ -50,10 +50,6 @@ fn resolve_namespace(explicit: &Option<String>) -> String {
 
 /// Execute the `logs` subcommand: fetch → classify → filter → reduce → export.
 pub async fn run_logs(args: LogsArgs) -> Result<()> {
-    if args.pod.is_empty() {
-        bail!("at least one --pod is required for the logs command");
-    }
-
     let context = resolve_context(&args.context)?;
     let namespace = resolve_namespace(&args.namespace);
     let filter_config = args.filter_config();
@@ -61,8 +57,23 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
     let time_range = args.parse_time_range()?;
     let search = args.search.clone();
 
+    // Resolve target pods: explicit --pod flags or auto-discover all in namespace.
+    let pod_names: Vec<String> = if args.pod.is_empty() {
+        let pods = k8s::pods::list_pods(&context, &namespace)
+            .await
+            .with_context(|| {
+                format!("failed to list pods in namespace '{namespace}' (context '{context}')")
+            })?;
+        if pods.is_empty() {
+            bail!("no pods found in namespace '{namespace}' (context '{context}')");
+        }
+        pods.iter().map(|p| p.name.clone()).collect()
+    } else {
+        args.pod.clone()
+    };
+
     if args.follow {
-        return run_logs_follow(&args, &context, &namespace, &filter_config).await;
+        return run_logs_follow(&args, &context, &namespace, &filter_config, &pod_names).await;
     }
 
     // Batch mode: fetch logs for all pods, classify, filter, reduce, export.
@@ -70,14 +81,15 @@ pub async fn run_logs(args: LogsArgs) -> Result<()> {
     let mut all_classified: Vec<ClassifiedLine> = Vec::new();
     let mut pod_summaries: Vec<PodSummary> = Vec::new();
 
-    for pod_name in &args.pod {
-        // Fetch pod info for the summary.
-        let pods = k8s::pods::list_pods(&context, &namespace)
-            .await
-            .with_context(|| {
-                format!("failed to list pods in namespace '{namespace}' (context '{context}')")
-            })?;
-        if let Some(info) = pods.iter().find(|p| p.name == *pod_name) {
+    // Fetch pod info once for summaries.
+    let all_pods = k8s::pods::list_pods(&context, &namespace)
+        .await
+        .with_context(|| {
+            format!("failed to list pods in namespace '{namespace}' (context '{context}')")
+        })?;
+
+    for pod_name in &pod_names {
+        if let Some(info) = all_pods.iter().find(|p| p.name == *pod_name) {
             pod_summaries.push(PodSummary {
                 name: info.name.clone(),
                 status: info.status.clone(),
@@ -197,6 +209,7 @@ async fn run_logs_follow(
     context: &str,
     namespace: &str,
     filter_config: &FilterConfig,
+    pod_names: &[String],
 ) -> Result<()> {
     let stdout = io::stdout();
     let mut writer = io::BufWriter::new(stdout.lock());
@@ -207,10 +220,12 @@ async fn run_logs_follow(
 
     // For follow mode we only support a single pod currently.
     // Multi-pod follow would require multiplexing streams.
-    if args.pod.len() > 1 {
-        bail!("--follow currently supports a single --pod (multi-pod follow not yet implemented)");
+    if pod_names.len() > 1 {
+        bail!(
+            "--follow currently supports a single pod (multi-pod follow not yet implemented). Use --pod to select one."
+        );
     }
-    let pod_name = &args.pod[0];
+    let pod_name = &pod_names[0];
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let mut stream = k8s::logs::stream_logs(

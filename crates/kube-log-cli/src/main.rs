@@ -35,9 +35,7 @@ fn preprocess_args(mut args: Vec<String>) -> Vec<String> {
     }
 
     if let Some(pos) = args.iter().position(|a| a == "-n") {
-        let next_is_value = args
-            .get(pos + 1)
-            .is_some_and(|s| !s.starts_with('-'));
+        let next_is_value = args.get(pos + 1).is_some_and(|s| !s.starts_with('-'));
         if !next_is_value {
             // Bare `-n` → rewrite to `ns` subcommand.
             args.remove(pos);

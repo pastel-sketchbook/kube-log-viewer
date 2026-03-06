@@ -87,7 +87,7 @@ tasks:
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
         for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
         done
         cargo generate-lockfile
         echo "Bumped $CURRENT -> $NEXT"
@@ -101,7 +101,7 @@ tasks:
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$MAJOR.$((MINOR + 1)).0"
         for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
         done
         cargo generate-lockfile
         echo "Bumped $CURRENT -> $NEXT"
@@ -115,7 +115,7 @@ tasks:
         IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
         NEXT="$((MAJOR + 1)).0.0"
         for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i '' "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
         done
         cargo generate-lockfile
         echo "Bumped $CURRENT -> $NEXT"
