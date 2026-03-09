@@ -280,6 +280,37 @@ impl Default for Classifier {
 }
 
 // ---------------------------------------------------------------------------
+// Public helpers
+// ---------------------------------------------------------------------------
+
+/// Check whether a raw log line is a health check.
+///
+/// This is a stateless check (no dedup tracking) that applies the same
+/// patterns used by [`Classifier::classify`]:
+///
+/// - Substring matching against [`HEALTHCHECK_PATTERNS`] (case-insensitive)
+///   on the raw text.
+/// - If the line is JSON, field-level inspection of well-known keys like
+///   `user_agent`, `uri`, `path`, `url`, `request_uri`, `request_path`.
+///
+/// Designed for use by the TUI health-check filter where full classification
+/// is overkill — callers only need to know "should this line be hidden?"
+pub fn is_health_check_line(raw: &str) -> bool {
+    // 1. Check the raw text for health-check substrings.
+    if is_healthcheck(raw) {
+        return true;
+    }
+
+    // 2. If the line is JSON, also inspect structured fields.
+    let (_, _, fields) = extract_json_fields(raw);
+    if is_json_healthcheck(fields.as_ref()) {
+        return true;
+    }
+
+    false
+}
+
+// ---------------------------------------------------------------------------
 // Classification helpers
 // ---------------------------------------------------------------------------
 
@@ -1127,6 +1158,97 @@ mod tests {
         );
     }
 
+    // -- logfmt health check detection -----------------------------------------
+
+    #[test]
+    fn test_classify_logfmt_health_check_path() {
+        // Logfmt-style structured log with path=/health should be classified
+        // as HealthCheck, not Novel/Normal.
+        let mut c = Classifier::new();
+        let line = "time=2026-03-09T20:09:33.759Z level=INFO msg=request method=GET path=/health status=200 duration_ms=0 request_id=yGoqPqBXNmfLNFmYyzEbIPdgjLoqOUfC";
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with path=/health should be classified as HealthCheck"
+        );
+    }
+
+    #[test]
+    fn test_classify_logfmt_health_check_with_k8s_prefix() {
+        // Same logfmt line but with K8s timestamp prefix.
+        let mut c = Classifier::new();
+        let line = "2026-03-09 15:09:33 time=2026-03-09T20:09:33.759Z level=INFO msg=request method=GET path=/health status=200 duration_ms=0 request_id=yGoqPqBXNmfLNFmYyzEbIPdgjLoqOUfC";
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with K8s prefix and path=/health should be classified as HealthCheck"
+        );
+    }
+
+    #[test]
+    fn test_classify_logfmt_health_check_healthz() {
+        let mut c = Classifier::new();
+        let line = "level=INFO msg=request method=GET path=/healthz status=200";
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with path=/healthz should be classified as HealthCheck"
+        );
+    }
+
+    #[test]
+    fn test_classify_logfmt_health_check_readyz() {
+        let mut c = Classifier::new();
+        let line = "level=INFO msg=request method=GET path=/readyz status=200";
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with path=/readyz should be classified as HealthCheck"
+        );
+    }
+
+    #[test]
+    fn test_classify_logfmt_health_check_kube_probe_ua() {
+        let mut c = Classifier::new();
+        let line = "level=INFO msg=request method=GET path=/api/status user_agent=kube-probe/1.28 status=200";
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with kube-probe user_agent should be classified as HealthCheck"
+        );
+    }
+
+    #[test]
+    fn test_classify_logfmt_quoted_path_health() {
+        // Some logfmt implementations quote values with spaces or special chars.
+        let mut c = Classifier::new();
+        let line = r#"level=INFO msg=request method=GET path="/health" status=200"#;
+        let result = c.classify(line, "pod-1", None);
+        assert_eq!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with quoted path=\"/health\" should be classified as HealthCheck"
+        );
+    }
+
+    #[test]
+    fn test_classify_logfmt_non_health_path() {
+        // A logfmt line with a non-health path should NOT be classified as HealthCheck.
+        let mut c = Classifier::new();
+        let line = "level=INFO msg=request method=GET path=/api/users status=200 duration_ms=5";
+        let result = c.classify(line, "pod-1", None);
+        assert_ne!(
+            result.class,
+            LineClass::HealthCheck,
+            "logfmt line with path=/api/users should not be classified as HealthCheck"
+        );
+    }
+
     #[test]
     fn test_nginx_304_with_safari_useragent_not_error() {
         // HTTP 304 with Safari user agent — another common false positive pattern.
@@ -1138,5 +1260,54 @@ mod tests {
             LineClass::Error,
             "HTTP 304 nginx access log with Safari user agent must not be classified as error"
         );
+    }
+
+    // -- is_health_check_line (public helper) --------------------------------
+
+    #[test]
+    fn test_is_health_check_line_logfmt_path_health() {
+        assert!(is_health_check_line(
+            "time=2026-03-09T20:09:33.759Z level=INFO msg=request method=GET path=/health status=200 duration_ms=0 request_id=abc123"
+        ));
+    }
+
+    #[test]
+    fn test_is_health_check_line_kube_probe() {
+        assert!(is_health_check_line(
+            "GET /status user_agent=kube-probe/1.32 200 OK"
+        ));
+    }
+
+    #[test]
+    fn test_is_health_check_line_healthz() {
+        assert!(is_health_check_line("GET /healthz 200 OK"));
+    }
+
+    #[test]
+    fn test_is_health_check_line_readyz() {
+        assert!(is_health_check_line("GET /readyz 200 OK"));
+    }
+
+    #[test]
+    fn test_is_health_check_line_json_uri() {
+        assert!(is_health_check_line(
+            r#"{"time":"2026-03-06T10:00:00Z","method":"GET","uri":"/healthz","status":200}"#
+        ));
+    }
+
+    #[test]
+    fn test_is_health_check_line_json_kube_probe_ua() {
+        assert!(is_health_check_line(
+            r#"{"method":"GET","uri":"/custom","user_agent":"kube-probe/1.28","status":200}"#
+        ));
+    }
+
+    #[test]
+    fn test_is_health_check_line_non_health() {
+        assert!(!is_health_check_line("GET /api/users 200 OK"));
+        assert!(!is_health_check_line("INFO: request processed"));
+        assert!(!is_health_check_line(
+            r#"{"method":"GET","uri":"/api/data","status":200}"#
+        ));
     }
 }

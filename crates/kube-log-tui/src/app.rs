@@ -910,14 +910,14 @@ impl App {
             .log_lines
             .iter()
             .filter(|tl| {
-                // Health check filter: hide lines from Kubernetes probes.
-                // Any request with "kube-probe" user-agent is a K8s
-                // liveness/readiness/startup probe, regardless of path.
-                if self.hide_health_checks {
-                    let lower = tl.line.to_lowercase();
-                    if lower.contains("kube-probe") {
-                        return false;
-                    }
+                // Health check filter: hide lines matching known health
+                // check patterns (kube-probe user-agent, /healthz, /readyz,
+                // /livez, /health, etc.). Uses the same pattern set as the
+                // CLI classifier for consistency.
+                if self.hide_health_checks
+                    && kube_log_core::classify::is_health_check_line(&tl.line)
+                {
+                    return false;
                 }
                 // Search filter
                 if let Some(ref lower) = search_lower
@@ -2822,16 +2822,37 @@ mod tests {
     }
 
     #[test]
-    fn test_health_filter_keeps_lines_without_kube_probe() {
+    fn test_health_filter_hides_health_path_without_kube_probe() {
+        // Lines with /health, /healthz, /readyz, /livez paths should be
+        // filtered even when there's no kube-probe user-agent. This covers
+        // logfmt and plain-text health check access logs.
         let mut app = test_app();
         app.hide_health_checks = true;
         app.log_lines = vec![
-            tl("GET /health check passed"), // "health" but no kube-probe
-            tl("INFO: all good"),           // neither
+            tl(
+                "time=2026-03-09T20:09:33.759Z level=INFO msg=request method=GET path=/health status=200 duration_ms=0 request_id=abc123",
+            ),
+            tl("GET /healthz 200 OK"),
+            tl("GET /readyz 200 OK"),
+            tl("GET /livez 200 OK"),
+            tl("INFO: all good"), // no health pattern — should be kept
         ];
         let filtered = app.filtered_log_lines();
         let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
-        assert_eq!(lines, vec!["GET /health check passed", "INFO: all good",]);
+        assert_eq!(lines, vec!["INFO: all good"]);
+    }
+
+    #[test]
+    fn test_health_filter_keeps_lines_without_health_patterns() {
+        let mut app = test_app();
+        app.hide_health_checks = true;
+        app.log_lines = vec![
+            tl("GET /api/users 200 OK"), // no health pattern
+            tl("INFO: all good"),        // neither
+        ];
+        let filtered = app.filtered_log_lines();
+        let lines: Vec<&str> = filtered.iter().map(|tl| tl.line.as_str()).collect();
+        assert_eq!(lines, vec!["GET /api/users 200 OK", "INFO: all good"]);
     }
 
     #[test]
