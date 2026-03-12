@@ -41,11 +41,17 @@ pub struct LogStreamConfig {
 }
 
 impl Default for LogStreamConfig {
-    /// TUI default: follow mode, last 100 lines, timestamps enabled.
+    /// TUI default: follow mode, last 500 lines, timestamps enabled.
+    ///
+    /// 500 provides a larger buffer so that client-side filtering (e.g.
+    /// hiding health-check lines) still leaves meaningful content visible.
+    /// With 100 lines, pods that emit frequent health checks could fill the
+    /// entire tail window, leaving the user with an empty display after
+    /// filtering.
     fn default() -> Self {
         Self {
             follow: true,
-            tail_lines: Some(100),
+            tail_lines: Some(500),
             since_seconds: None,
             timestamps: true,
         }

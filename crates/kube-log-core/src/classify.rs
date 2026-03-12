@@ -1310,4 +1310,112 @@ mod tests {
             r#"{"method":"GET","uri":"/api/data","status":200}"#
         ));
     }
+
+    // -- Regression: real pod logs must not be hidden by TUI health filter ---
+    //
+    // These tests use the exact raw log lines from a live auto-pic pod that
+    // the TUI failed to display. The TUI defaults to `hide_health_checks=true`
+    // and calls `is_health_check_line()` on every raw line; if it returns
+    // `true` the line is silently dropped.
+
+    #[test]
+    fn test_autopic_info_request_not_health_check() {
+        // Novel INFO request to /acapi/v1/values/export — not a health endpoint.
+        let raw = "2026-03-12T20:57:09.229057695Z time=2026-03-12T20:57:09.228Z level=INFO msg=request method=POST path=/acapi/v1/values/export status=200 duration_ms=98 request_id=3029cfff-eb82-43a6-afc3-67f989ed5538";
+        assert!(
+            !is_health_check_line(raw),
+            "logfmt line with path=/acapi/v1/values/export must NOT be filtered as health check"
+        );
+    }
+
+    #[test]
+    fn test_autopic_error_internal_not_health_check() {
+        // ERROR line about missing config var — definitely not a health check.
+        let raw = r#"2026-03-12T20:57:47.740191646Z 2026/03/12 20:57:47 ERROR internal error detail="server is not configured: API_TOKEN is missing" method=POST path=/acapi/v1/pr/create request_id=142bd97c-7db1-4fc1-aca3-e592e62b570d"#;
+        assert!(
+            !is_health_check_line(raw),
+            "ERROR line about missing config must NOT be filtered as health check"
+        );
+    }
+
+    #[test]
+    fn test_autopic_error_500_not_health_check() {
+        // ERROR request with status=500 — not a health check.
+        let raw = "2026-03-12T20:57:47.740222066Z time=2026-03-12T20:57:47.740Z level=ERROR msg=request method=POST path=/acapi/v1/pr/create status=500 duration_ms=0 request_id=142bd97c-7db1-4fc1-aca3-e592e62b570d";
+        assert!(
+            !is_health_check_line(raw),
+            "logfmt ERROR line with status=500 must NOT be filtered as health check"
+        );
+    }
+
+    #[test]
+    fn test_autopic_classify_info_as_novel() {
+        // The CLI classified this as "novel" — verify the Classifier agrees.
+        let mut c = Classifier::new();
+        let raw = "2026-03-12T20:57:09.229057695Z time=2026-03-12T20:57:09.228Z level=INFO msg=request method=POST path=/acapi/v1/values/export status=200 duration_ms=98 request_id=3029cfff-eb82-43a6-afc3-67f989ed5538";
+        let result = c.classify(
+            raw,
+            "auto-pic-dev-deployment-f6b5858c8-bm27s",
+            Some("auto-pic"),
+        );
+        assert_eq!(
+            result.class,
+            LineClass::Novel,
+            "INFO request to /acapi/v1/values/export should be classified as Novel"
+        );
+        assert_eq!(result.level.as_deref(), Some("INFO"));
+    }
+
+    #[test]
+    fn test_autopic_classify_errors() {
+        // Both ERROR lines should be classified as Error.
+        let mut c = Classifier::new();
+
+        let raw1 = r#"2026-03-12T20:57:47.740191646Z 2026/03/12 20:57:47 ERROR internal error detail="server is not configured: API_TOKEN is missing" method=POST path=/acapi/v1/pr/create request_id=142bd97c-7db1-4fc1-aca3-e592e62b570d"#;
+        let r1 = c.classify(
+            raw1,
+            "auto-pic-dev-deployment-f6b5858c8-bm27s",
+            Some("auto-pic"),
+        );
+        assert_eq!(
+            r1.class,
+            LineClass::Error,
+            "missing config error line must be classified as Error"
+        );
+
+        let raw2 = "2026-03-12T20:57:47.740222066Z time=2026-03-12T20:57:47.740Z level=ERROR msg=request method=POST path=/acapi/v1/pr/create status=500 duration_ms=0 request_id=142bd97c-7db1-4fc1-aca3-e592e62b570d";
+        let r2 = c.classify(
+            raw2,
+            "auto-pic-dev-deployment-f6b5858c8-bm27s",
+            Some("auto-pic"),
+        );
+        assert_eq!(
+            r2.class,
+            LineClass::Error,
+            "status=500 ERROR request must be classified as Error"
+        );
+    }
+
+    #[test]
+    fn test_autopic_lines_not_filtered_together() {
+        // Simulate the TUI's filtering: all three lines should survive when
+        // hide_health_checks is enabled (the only default filter).
+        let lines = [
+            "2026-03-12T20:57:09.229057695Z time=2026-03-12T20:57:09.228Z level=INFO msg=request method=POST path=/acapi/v1/values/export status=200 duration_ms=98 request_id=3029cfff-eb82-43a6-afc3-67f989ed5538",
+            r#"2026-03-12T20:57:47.740191646Z 2026/03/12 20:57:47 ERROR internal error detail="server is not configured: API_TOKEN is missing" method=POST path=/acapi/v1/pr/create request_id=142bd97c-7db1-4fc1-aca3-e592e62b570d"#,
+            "2026-03-12T20:57:47.740222066Z time=2026-03-12T20:57:47.740Z level=ERROR msg=request method=POST path=/acapi/v1/pr/create status=500 duration_ms=0 request_id=142bd97c-7db1-4fc1-aca3-e592e62b570d",
+        ];
+
+        let surviving: Vec<&&str> = lines
+            .iter()
+            .filter(|line| !is_health_check_line(line))
+            .collect();
+
+        assert_eq!(
+            surviving.len(),
+            lines.len(),
+            "all 3 auto-pic log lines should survive the health check filter, but {} were dropped",
+            lines.len() - surviving.len()
+        );
+    }
 }

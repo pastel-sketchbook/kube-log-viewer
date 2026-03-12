@@ -79,6 +79,36 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
     let filtered_lines = app.filtered_log_lines();
     let total_lines = filtered_lines.len();
 
+    // Show a hint when all fetched lines were filtered out, so the user
+    // knows logs exist but are hidden by the active filter (e.g. health
+    // check suppression).
+    if total_lines == 0 && !app.log_lines.is_empty() {
+        let block = Block::default()
+            .title(Line::from(title_spans))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+
+        let hint = if app.hide_health_checks {
+            "All lines hidden by filters. Press H to show health checks."
+        } else if !app.search_query.is_empty() {
+            "No lines match the current search."
+        } else {
+            "All lines hidden by active filters."
+        };
+
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            hint,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::ITALIC),
+        )))
+        .block(block)
+        .alignment(Alignment::Center);
+
+        frame.render_widget(paragraph, area);
+        return;
+    }
+
     // Calculate visible window
     let inner_height = area.height.saturating_sub(2) as usize; // subtract borders
     let scroll_offset = if app.follow_mode {
@@ -274,6 +304,38 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
     }
     let filtered_lines = app.filtered_log_lines_for_pane(pane_idx);
     let total_lines = filtered_lines.len();
+
+    // Show a hint when all fetched lines for this pane were filtered out.
+    let has_raw_lines = app
+        .log_lines
+        .iter()
+        .any(|tl| tl.source.is_empty() || tl.source == handle.pod_name);
+    if total_lines == 0 && has_raw_lines {
+        let block = Block::default()
+            .title(Line::from(title_spans))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+
+        let hint = if app.hide_health_checks {
+            "All lines hidden by filters. Press H to show health checks."
+        } else if !app.search_query.is_empty() {
+            "No lines match the current search."
+        } else {
+            "All lines hidden by active filters."
+        };
+
+        let paragraph = Paragraph::new(Line::from(Span::styled(
+            hint,
+            Style::default()
+                .fg(theme.accent)
+                .add_modifier(Modifier::ITALIC),
+        )))
+        .block(block)
+        .alignment(Alignment::Center);
+
+        frame.render_widget(paragraph, area);
+        return;
+    }
 
     let inner_height = area.height.saturating_sub(2) as usize;
     let scroll_offset = if handle.view.follow_mode {
