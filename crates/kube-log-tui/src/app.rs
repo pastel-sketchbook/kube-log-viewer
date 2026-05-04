@@ -1478,7 +1478,7 @@ async fn write_csv(
     }
 
     let columns: Vec<String> = std::iter::once("_source".to_string())
-        .chain(all_keys.into_iter())
+        .chain(all_keys)
         .chain(std::iter::once("_raw".to_string()))
         .collect();
 

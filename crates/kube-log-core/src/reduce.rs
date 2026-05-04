@@ -215,12 +215,10 @@ pub fn reduce(lines: &[ClassifiedLine], filter_stats: &FilterStats) -> Summary {
                 warning_count += 1;
                 warnings.add(line);
             }
-            LineClass::Novel => {
-                if novel_patterns.len() < MAX_NOVEL_PATTERNS {
-                    // Store the message or raw line as the pattern.
-                    let pattern = line.msg.as_deref().unwrap_or(&line.raw).to_string();
-                    novel_patterns.push(pattern);
-                }
+            LineClass::Novel if novel_patterns.len() < MAX_NOVEL_PATTERNS => {
+                // Store the message or raw line as the pattern.
+                let pattern = line.msg.as_deref().unwrap_or(&line.raw).to_string();
+                novel_patterns.push(pattern);
             }
             LineClass::Lifecycle => {
                 // Check for restart indicators.
