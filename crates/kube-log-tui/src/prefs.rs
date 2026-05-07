@@ -18,6 +18,14 @@ pub struct Prefs {
     /// The `name` field of the last selected [`Theme`](crate::ui::theme::Theme).
     #[serde(default)]
     pub theme: Option<String>,
+
+    /// Last selected Kubernetes context name.
+    #[serde(default)]
+    pub context: Option<String>,
+
+    /// Last selected namespace within the context.
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -119,7 +127,10 @@ pub fn theme_index_from_prefs(prefs: &Prefs) -> usize {
 /// Build a [`Prefs`] snapshot from the current theme index.
 pub fn prefs_from_theme_index(index: usize) -> Prefs {
     let name = THEMES.get(index).map(|t| t.name.to_owned());
-    Prefs { theme: name }
+    Prefs {
+        theme: name,
+        ..load()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +143,10 @@ mod tests {
 
     #[test]
     fn theme_index_default_when_none() {
-        let prefs = Prefs { theme: None };
+        let prefs = Prefs {
+            theme: None,
+            ..Default::default()
+        };
         assert_eq!(theme_index_from_prefs(&prefs), 0);
     }
 
@@ -140,6 +154,7 @@ mod tests {
     fn theme_index_default_when_unknown() {
         let prefs = Prefs {
             theme: Some("NonExistentTheme".into()),
+            ..Default::default()
         };
         assert_eq!(theme_index_from_prefs(&prefs), 0);
     }
@@ -150,6 +165,7 @@ mod tests {
         let target = &THEMES[1];
         let prefs = Prefs {
             theme: Some(target.name.to_owned()),
+            ..Default::default()
         };
         assert_eq!(theme_index_from_prefs(&prefs), 1);
     }
@@ -167,15 +183,29 @@ mod tests {
     fn round_trip_toml_serialization() {
         let prefs = Prefs {
             theme: Some("Gruvbox Dark".into()),
+            context: Some("my-cluster".into()),
+            namespace: Some("production".into()),
         };
         let toml_str = toml::to_string_pretty(&prefs).expect("serialize");
         let parsed: Prefs = toml::from_str(&toml_str).expect("deserialize");
         assert_eq!(parsed.theme.as_deref(), Some("Gruvbox Dark"));
+        assert_eq!(parsed.context.as_deref(), Some("my-cluster"));
+        assert_eq!(parsed.namespace.as_deref(), Some("production"));
     }
 
     #[test]
     fn empty_toml_yields_defaults() {
         let parsed: Prefs = toml::from_str("").expect("deserialize");
         assert!(parsed.theme.is_none());
+        assert!(parsed.context.is_none());
+        assert!(parsed.namespace.is_none());
+    }
+
+    #[test]
+    fn backwards_compatible_toml_without_new_fields() {
+        let parsed: Prefs = toml::from_str("theme = \"Dark\"").expect("deserialize");
+        assert_eq!(parsed.theme.as_deref(), Some("Dark"));
+        assert!(parsed.context.is_none());
+        assert!(parsed.namespace.is_none());
     }
 }

@@ -208,6 +208,11 @@ pub struct App {
     pub current_namespace: String,
     pub pods: Vec<k8s::pods::PodInfo>,
 
+    /// Saved context from prefs, consumed on first `ContextsLoaded`.
+    saved_context: Option<String>,
+    /// Saved namespace from prefs, consumed on first `NamespacesLoaded`.
+    saved_namespace: Option<String>,
+
     // UI state
     pub focus: Focus,
     pub pod_list_state: ListState,
@@ -261,12 +266,19 @@ pub struct App {
 
 impl App {
     pub fn new(tx: mpsc::UnboundedSender<AppEvent>) -> Self {
+        let prefs = prefs::load();
         Self {
             contexts: Vec::new(),
             current_context: String::new(),
             namespaces: Vec::new(),
-            current_namespace: String::from("default"),
+            current_namespace: prefs
+                .namespace
+                .clone()
+                .unwrap_or_else(|| String::from("default")),
             pods: Vec::new(),
+
+            saved_context: prefs.context.clone(),
+            saved_namespace: prefs.namespace.clone(),
 
             focus: Focus::Pods,
             pod_list_state: ListState::default(),
@@ -294,7 +306,7 @@ impl App {
             stream_mode: StreamMode::default(),
             active_pane: 0,
 
-            theme_index: prefs::theme_index_from_prefs(&prefs::load()),
+            theme_index: prefs::theme_index_from_prefs(&prefs),
 
             az_login_in_progress: false,
             az_login_cancel: None,
@@ -635,17 +647,16 @@ impl App {
         let Some(pod) = self.pods.get(i) else { return };
 
         let pod_name = pod.name.clone();
-        let containers = pod.containers.clone();
 
         self.selected_pod = Some(pod_name.clone());
-        self.containers = containers.clone();
+        self.containers = pod.containers.clone();
         self.log_lines.clear();
         self.log_scroll_offset = 0;
         self.follow_mode = true;
         self.stream_mode = StreamMode::Single;
         self.active_pane = 0;
 
-        let container = containers.first().cloned();
+        let container = self.containers.first().cloned();
         self.selected_container = container.clone();
 
         self.start_log_stream(&pod_name, container.as_deref());
@@ -709,6 +720,7 @@ impl App {
                     self.active_pane = 0;
                     self.cancel_all_streams();
                     self.start_pod_watcher();
+                    self.save_prefs();
                 }
             }
             PopupKind::Contexts => {
@@ -727,6 +739,7 @@ impl App {
                     self.cancel_all_streams();
                     self.load_namespaces();
                     self.start_pod_watcher();
+                    self.save_prefs();
                 }
             }
             PopupKind::Containers => {
@@ -766,9 +779,16 @@ impl App {
     pub fn handle_app_event(&mut self, event: AppEvent) {
         match event {
             AppEvent::ContextsLoaded(contexts, current) => {
-                info!(count = contexts.len(), current = %current, "contexts loaded");
+                // If a saved context from prefs exists and is valid, use it
+                // instead of the kubeconfig current context.
+                let chosen = self
+                    .saved_context
+                    .take()
+                    .filter(|c| contexts.contains(c))
+                    .unwrap_or(current);
+                info!(count = contexts.len(), current = %chosen, "contexts loaded");
                 self.contexts = contexts;
-                self.current_context = current;
+                self.current_context = chosen;
                 self.load_namespaces();
                 self.start_pod_watcher();
             }
@@ -783,6 +803,14 @@ impl App {
                 } else {
                     debug!(count = namespaces.len(), "namespaces loaded");
                     self.namespaces = namespaces;
+
+                    // On first load, prefer the saved namespace from prefs.
+                    if let Some(saved) = self.saved_namespace.take()
+                        && self.namespaces.contains(&saved)
+                    {
+                        self.current_namespace = saved;
+                    }
+
                     if !self.namespaces.contains(&self.current_namespace) {
                         self.current_namespace = self
                             .namespaces
@@ -888,7 +916,16 @@ impl App {
 
     pub fn cycle_theme(&mut self) {
         self.theme_index = (self.theme_index + 1) % THEMES.len();
-        prefs::save(&prefs::prefs_from_theme_index(self.theme_index));
+        self.save_prefs();
+    }
+
+    /// Persist all user preferences to disk.
+    fn save_prefs(&self) {
+        prefs::save(&prefs::Prefs {
+            theme: THEMES.get(self.theme_index).map(|t| t.name.to_owned()),
+            context: Some(self.current_context.clone()).filter(|s| !s.is_empty()),
+            namespace: Some(self.current_namespace.clone()).filter(|s| !s.is_empty()),
+        });
     }
 
     pub fn filtered_log_lines(&self) -> Vec<&TaggedLine> {

@@ -76,7 +76,7 @@ fn resolve_context(explicit: &Option<String>) -> Result<String> {
 
 /// Resolve the namespace: explicit `--namespace` flag or fall back to "default".
 fn resolve_namespace(explicit: &Option<String>) -> String {
-    explicit.clone().unwrap_or_else(|| "default".to_string())
+    explicit.as_deref().unwrap_or("default").to_string()
 }
 
 /// Determine which container(s) to stream logs from.
@@ -412,10 +412,9 @@ async fn run_logs_follow(
     // Install ctrl-c handler to cancel the stream gracefully.
     let cancel_tx_clone = cancel_tx.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c()
-            .await
-            .expect("failed to install ctrl-c handler");
-        let _ = cancel_tx_clone.send(true);
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = cancel_tx_clone.send(true);
+        }
     });
 
     while let Some(item) = stream.next().await {

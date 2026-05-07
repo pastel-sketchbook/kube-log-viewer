@@ -1,6 +1,6 @@
 [package]
 name = "kube-log-tui"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2024"
 description = "A terminal UI for streaming and searching Kubernetes pod logs"
 

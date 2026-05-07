@@ -549,16 +549,13 @@ fn colorize_log_line<'a>(
             Some(converted) => Span::styled(converted, Style::default().fg(theme.log_timestamp)),
             None => Span::styled(ts, Style::default().fg(theme.log_timestamp)),
         };
-        let rest_span = match level_color {
-            Some(color) => Span::styled(rest, Style::default().fg(color)),
-            None => Span::raw(rest),
-        };
+        let rest_span = Span::styled(rest, Style::default().fg(level_color.unwrap_or(theme.fg)));
         vec![ts_span, rest_span]
     } else {
-        match level_color {
-            Some(color) => vec![Span::styled(line, Style::default().fg(color))],
-            None => vec![Span::raw(line)],
-        }
+        vec![Span::styled(
+            line,
+            Style::default().fg(level_color.unwrap_or(theme.fg)),
+        )]
     }
 }
 
@@ -585,12 +582,15 @@ fn highlight_search(
     let lower_query = query.to_lowercase();
 
     let ts_style = Style::default().fg(theme.log_timestamp);
+    let fg_style = Style::default().fg(theme.fg);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut last_end = 0;
 
     for (start, _) in lower_line.match_indices(&lower_query) {
         if start > last_end {
-            push_non_match_spans(&mut spans, &display, last_end, start, ts_end, ts_style);
+            push_non_match_spans(
+                &mut spans, &display, last_end, start, ts_end, ts_style, fg_style,
+            );
         }
         let end = start + query.len();
         spans.push(Span::styled(
@@ -610,6 +610,7 @@ fn highlight_search(
             display.len(),
             ts_end,
             ts_style,
+            fg_style,
         );
     }
 
@@ -625,13 +626,17 @@ fn push_non_match_spans(
     seg_end: usize,
     ts_end: usize,
     ts_style: Style,
+    fg_style: Style,
 ) {
     if seg_start >= seg_end {
         return;
     }
     if ts_end == 0 || seg_start >= ts_end {
         // Entirely past the timestamp
-        spans.push(Span::raw(display[seg_start..seg_end].to_string()));
+        spans.push(Span::styled(
+            display[seg_start..seg_end].to_string(),
+            fg_style,
+        ));
     } else if seg_end <= ts_end {
         // Entirely within the timestamp
         spans.push(Span::styled(
@@ -644,7 +649,7 @@ fn push_non_match_spans(
             display[seg_start..ts_end].to_string(),
             ts_style,
         ));
-        spans.push(Span::raw(display[ts_end..seg_end].to_string()));
+        spans.push(Span::styled(display[ts_end..seg_end].to_string(), fg_style));
     }
 }
 
@@ -697,7 +702,7 @@ mod tests {
             TimestampMode::Utc,
         );
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].style.fg, None);
+        assert_eq!(spans[0].style.fg, Some(DARK.fg));
     }
 
     #[test]
@@ -718,7 +723,7 @@ mod tests {
         assert_eq!(spans[0].content, "2024-01-15T10:00:00Z ");
         assert_eq!(spans[0].style.fg, Some(DARK.log_timestamp));
         // "INFO started" — no level keyword match (INFO not handled as special)
-        assert_eq!(spans[1].style.fg, None);
+        assert_eq!(spans[1].style.fg, Some(DARK.fg));
     }
 
     #[test]

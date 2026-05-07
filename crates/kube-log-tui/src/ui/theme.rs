@@ -63,6 +63,7 @@ pub const THEMES: &[Theme] = &[
     PASTEL_WAVES_DARK,
     ZOEGI_DARK,
     FFE_DARK,
+    POSTRBOARD_DARK,
     HIGH_CONTRAST,
     GRUVBOX_LIGHT,
     SOLARIZED_LIGHT,
@@ -72,6 +73,7 @@ pub const THEMES: &[Theme] = &[
     PASTEL_WAVES_LIGHT,
     ZOEGI_LIGHT,
     FFE_LIGHT,
+    POSTRBOARD_LIGHT,
 ];
 
 // -- Built-in default -------------------------------------------------------
@@ -866,13 +868,101 @@ pub const FFE_LIGHT: Theme = Theme {
     popup_fg: Color::Rgb(0x1e, 0x23, 0x2b),     // #1e232b
 };
 
+// -- Postrboard Dark (ref: pastel-market postrboard theme) -------------------
+
+pub const POSTRBOARD_DARK: Theme = Theme {
+    name: "Postrboard Dark",
+
+    bg: Color::Rgb(0x1a, 0x1b, 0x26),     // #1a1b26
+    fg: Color::Rgb(0xe2, 0xe8, 0xf0),     // #e2e8f0
+    muted: Color::Rgb(0x7c, 0x8d, 0xa3),  // #7c8da3
+    accent: Color::Rgb(0x4f, 0xb6, 0xe8), // #4fb6e8
+
+    header_border: Color::Rgb(0x2a, 0x2d, 0x3d), // #2a2d3d
+    context_fg: Color::Rgb(0x4f, 0xb6, 0xe8),    // #4fb6e8
+    namespace_fg: Color::Rgb(0x84, 0xcc, 0x16),  // #84cc16
+
+    border_focused: Color::Rgb(0x4f, 0xb6, 0xe8),
+    border_unfocused: Color::Rgb(0x2a, 0x2d, 0x3d), // #2a2d3d
+
+    status_running: Color::Rgb(0x84, 0xcc, 0x16), // #84cc16
+    status_pending: Color::Rgb(0xfb, 0x8a, 0x4d), // #fb8a4d
+    status_succeeded: Color::Rgb(0x60, 0xa5, 0xfa), // #60a5fa
+    status_failed: Color::Rgb(0xf8, 0x71, 0x71),  // #f87171
+    status_unknown: Color::Rgb(0x7c, 0x8d, 0xa3),
+
+    log_error: Color::Rgb(0xf8, 0x71, 0x71),
+    log_warn: Color::Rgb(0xfb, 0x8a, 0x4d),
+    log_timestamp: Color::Rgb(0x4a, 0x7e, 0xa8), // muted blue
+    log_debug: Color::Rgb(0x7c, 0x8d, 0xa3),
+    zebra_bg: Color::Rgb(0x1e, 0x1f, 0x2b), // bg + 4
+
+    highlight_bg: Color::Rgb(0x36, 0x3a, 0x4f), // #363a4f
+
+    search_fg: Color::Rgb(0xfb, 0x8a, 0x4d),
+    search_input_bg: Color::Rgb(0x36, 0x3a, 0x4f),
+    search_match_fg: Color::Rgb(0x1a, 0x1b, 0x26), // bg
+    search_match_bg: Color::Rgb(0xfb, 0x8a, 0x4d),
+
+    statusbar_bg: Color::Rgb(0x16, 0x17, 0x1f), // #16171f
+    statusbar_key: Color::Rgb(0x4f, 0xb6, 0xe8),
+    statusbar_label: Color::Rgb(0x7c, 0x8d, 0xa3),
+
+    popup_border: Color::Rgb(0x4f, 0xb6, 0xe8),
+    popup_fg: Color::Rgb(0xe2, 0xe8, 0xf0),
+};
+
+// -- Postrboard Light (ref: pastel-market postrboard light theme) ------------
+
+pub const POSTRBOARD_LIGHT: Theme = Theme {
+    name: "Postrboard Light",
+
+    bg: Color::Rgb(0xfa, 0xfa, 0xfa),     // #fafafa
+    fg: Color::Rgb(0x11, 0x18, 0x27),     // #111827
+    muted: Color::Rgb(0x64, 0x74, 0x8b),  // #64748b
+    accent: Color::Rgb(0x02, 0x84, 0xc7), // #0284c7
+
+    header_border: Color::Rgb(0xcb, 0xd5, 0xe1), // #cbd5e1
+    context_fg: Color::Rgb(0x02, 0x84, 0xc7),
+    namespace_fg: Color::Rgb(0x4d, 0x7c, 0x0f), // #4d7c0f
+
+    border_focused: Color::Rgb(0x02, 0x84, 0xc7),
+    border_unfocused: Color::Rgb(0xcb, 0xd5, 0xe1),
+
+    status_running: Color::Rgb(0x4d, 0x7c, 0x0f),
+    status_pending: Color::Rgb(0xc2, 0x41, 0x0c), // #c2410c
+    status_succeeded: Color::Rgb(0x02, 0x84, 0xc7),
+    status_failed: Color::Rgb(0xdc, 0x26, 0x26), // #dc2626
+    status_unknown: Color::Rgb(0x64, 0x74, 0x8b),
+
+    log_error: Color::Rgb(0xdc, 0x26, 0x26),
+    log_warn: Color::Rgb(0xc2, 0x41, 0x0c),
+    log_timestamp: Color::Rgb(0x3a, 0x60, 0x7e), // dark teal
+    log_debug: Color::Rgb(0x64, 0x74, 0x8b),
+    zebra_bg: Color::Rgb(0xf1, 0xf5, 0xf9), // #f1f5f9
+
+    highlight_bg: Color::Rgb(0xe2, 0xe8, 0xf0), // #e2e8f0
+
+    search_fg: Color::Rgb(0xc2, 0x41, 0x0c),
+    search_input_bg: Color::Rgb(0xe2, 0xe8, 0xf0),
+    search_match_fg: Color::Rgb(0xfa, 0xfa, 0xfa), // bg
+    search_match_bg: Color::Rgb(0xc2, 0x41, 0x0c),
+
+    statusbar_bg: Color::Rgb(0xf1, 0xf5, 0xf9),
+    statusbar_key: Color::Rgb(0x02, 0x84, 0xc7),
+    statusbar_label: Color::Rgb(0x64, 0x74, 0x8b),
+
+    popup_border: Color::Rgb(0x02, 0x84, 0xc7),
+    popup_fg: Color::Rgb(0x11, 0x18, 0x27),
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_theme_count() {
-        assert_eq!(THEMES.len(), 18);
+        assert_eq!(THEMES.len(), 20);
     }
 
     #[test]
