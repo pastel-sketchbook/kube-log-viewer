@@ -6,6 +6,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use kube_log_core::k8s::pods::PodInfo;
 use kube_log_tui::app::{App, Focus, InputMode, PopupKind};
 use kube_log_tui::event::AppEvent;
+use kube_log_tui::prefs::Prefs;
 use tokio::sync::mpsc;
 
 // ---------------------------------------------------------------------------
@@ -20,7 +21,7 @@ fn key(code: KeyCode) -> KeyEvent {
 /// test can inspect events the app sends to background tasks.
 fn test_app() -> (App, mpsc::UnboundedReceiver<AppEvent>) {
     let (tx, rx) = mpsc::unbounded_channel::<AppEvent>();
-    (App::new(tx), rx)
+    (App::with_prefs(tx, Prefs::default()), rx)
 }
 
 /// Build a realistic [`PodInfo`] simulating a K8s API response.

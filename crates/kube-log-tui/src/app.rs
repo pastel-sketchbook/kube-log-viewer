@@ -266,7 +266,14 @@ pub struct App {
 
 impl App {
     pub fn new(tx: mpsc::UnboundedSender<AppEvent>) -> Self {
-        let prefs = prefs::load();
+        Self::with_prefs(tx, prefs::load())
+    }
+
+    /// Constructor that uses an explicit [`prefs::Prefs`] value instead of
+    /// reading from disk.  Tests use this with [`prefs::Prefs::default()`]
+    /// to remain hermetic regardless of any user prefs file present on the
+    /// host (CI runners or local machines).
+    pub fn with_prefs(tx: mpsc::UnboundedSender<AppEvent>, prefs: prefs::Prefs) -> Self {
         Self {
             contexts: Vec::new(),
             current_context: String::new(),
@@ -1632,7 +1639,7 @@ mod tests {
 
     fn test_app() -> App {
         let (tx, _rx) = mpsc::unbounded_channel::<AppEvent>();
-        App::new(tx)
+        App::with_prefs(tx, prefs::Prefs::default())
     }
 
     fn test_app_with_pods() -> App {
