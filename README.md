@@ -252,4 +252,4 @@ task build:release
 
 ## License
 
-MIT
+MIT — see [LICENSE](LICENSE).
