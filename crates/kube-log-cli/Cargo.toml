@@ -1,6 +1,6 @@
 [package]
 name = "kube-log-cli"
-version = "0.5.8"
+version = "0.5.9"
 edition = "2024"
 description = "LLM-facing CLI for Kubernetes log analysis with anomaly detection"
 
@@ -11,7 +11,7 @@ path = "src/main.rs"
 [dependencies]
 kube-log-core = { path = "../kube-log-core" }
 anyhow = "1.0.102"
-jiff = "0.2.24"
+jiff = "0.2.28"
 clap = { version = "4", features = ["derive"] }
 clap_complete = { version = "4", features = ["unstable-dynamic"] }
 futures = "0.3.32"

@@ -112,6 +112,7 @@ const HEALTHCHECK_PATTERNS: &[&str] = &[
     "/readyz",
     "/livez",
     "/health",
+    "/ready",
     "health check",
     "healthcheck",
     "liveness",
