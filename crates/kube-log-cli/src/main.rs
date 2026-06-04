@@ -11,7 +11,7 @@
 
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::{CommandFactory, Parser};
 use clap_complete::CompleteEnv;
 
@@ -52,10 +52,17 @@ fn main() -> ExitCode {
     // nested `block_on()` panics inside an existing runtime context.
     CompleteEnv::with_factory(cli::Cli::command).complete();
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
+    let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("failed to create tokio runtime");
+        .context("failed to create tokio runtime")
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            write_cli_error(&e);
+            return ExitCode::FAILURE;
+        }
+    };
 
     rt.block_on(async_main())
 }
@@ -65,18 +72,22 @@ async fn async_main() -> ExitCode {
 
     if let Err(e) = run(args).await {
         // Structured error output for LLM consumption.
-        let error = serde_json::json!({
-            "error": "cli_error",
-            "message": format!("{e:#}"),
-        });
-        eprintln!(
-            "{}",
-            serde_json::to_string_pretty(&error).unwrap_or_else(|_| format!("{e:#}"))
-        );
+        write_cli_error(&e);
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
     }
+}
+
+fn write_cli_error(e: &anyhow::Error) {
+    let error = serde_json::json!({
+        "error": "cli_error",
+        "message": format!("{e:#}"),
+    });
+    eprintln!(
+        "{}",
+        serde_json::to_string_pretty(&error).unwrap_or_else(|_| format!("{e:#}"))
+    );
 }
 
 async fn run(args: cli::Cli) -> Result<()> {

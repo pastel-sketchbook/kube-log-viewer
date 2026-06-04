@@ -112,6 +112,8 @@ pub async fn stream_logs(
         let mut line_count: u64 = 0;
 
         loop {
+            // Cancellation safety: `lines.next()` is polled repeatedly and the
+            // cancellation branch only observes a watch value before exiting.
             tokio::select! {
                 line = lines.next() => {
                     match line {

@@ -28,24 +28,30 @@ use crate::types::{ClassifiedLine, LineClass};
 
 /// UUID pattern: 8-4-4-4-12 hex digits.
 static UUID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
     Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
         .expect("hardcoded UUID regex is valid")
 });
 
 /// IPv4 address.
 static IPV4_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
     Regex::new(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b").expect("hardcoded IPv4 regex is valid")
 });
 
 /// Hex strings (8+ chars, e.g. request IDs, hashes).
-static HEX_ID_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b[0-9a-fA-F]{8,}\b").expect("hardcoded hex ID regex is valid"));
+static HEX_ID_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
+    Regex::new(r"\b[0-9a-fA-F]{8,}\b").expect("hardcoded hex ID regex is valid")
+});
 
 /// Standalone numeric values (integers and decimals). Uses a left word
 /// boundary but allows the number to be followed by letter suffixes like
 /// `ms`, `Gi`, `s`, etc. (common in log lines for durations/sizes).
-static NUMERIC_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b\d+(\.\d+)?").expect("hardcoded numeric regex is valid"));
+static NUMERIC_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
+    Regex::new(r"\b\d+(\.\d+)?").expect("hardcoded numeric regex is valid")
+});
 
 // ---------------------------------------------------------------------------
 // Classification keyword patterns
@@ -121,12 +127,16 @@ const HEALTHCHECK_PATTERNS: &[&str] = &[
 ];
 
 /// HTTP 5xx status code pattern.
-static HTTP_5XX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b5\d{2}\b").expect("hardcoded HTTP 5xx regex is valid"));
+static HTTP_5XX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
+    Regex::new(r"\b5\d{2}\b").expect("hardcoded HTTP 5xx regex is valid")
+});
 
 /// HTTP 4xx status code pattern.
-static HTTP_4XX_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b4\d{2}\b").expect("hardcoded HTTP 4xx regex is valid"));
+static HTTP_4XX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
+    Regex::new(r"\b4\d{2}\b").expect("hardcoded HTTP 4xx regex is valid")
+});
 
 // ---------------------------------------------------------------------------
 // Classifier

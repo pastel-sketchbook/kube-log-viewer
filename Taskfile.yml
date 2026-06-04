@@ -12,6 +12,21 @@ tasks:
     cmds:
       - cargo fmt --all
 
+  fmt:check:
+    desc: "Check Rust formatting"
+    cmds:
+      - cargo fmt --all -- --check
+
+  lint:
+    desc: "Run clippy with warnings as errors"
+    cmds:
+      - cargo clippy --workspace --all-targets -- -D warnings
+
+  cargo:check:
+    desc: "Compile-check the workspace"
+    cmds:
+      - cargo check --workspace --all-targets
+
   build:
     desc: "Build in debug mode"
     deps: [fmt]
@@ -25,11 +40,9 @@ tasks:
       - cargo build --workspace --release
 
   check:
-    desc: "Run fmt, cargo check, and clippy"
-    deps: [fmt]
+    desc: "Run the full local check suite"
     cmds:
-      - cargo check --workspace --all-targets
-      - cargo clippy --workspace --all-targets -- -D warnings
+      - task: check:all
 
   test:
     desc: "Run all tests"
@@ -42,11 +55,23 @@ tasks:
       - cargo test --workspace -- --nocapture
 
   check:all:
-    desc: "Run fmt, clippy, and tests"
+    desc: "Run version check, format check, lint, and tests"
     cmds:
-      - task: fmt
-      - task: check
+      - task: version:check
+      - task: fmt:check
+      - task: cargo:check
+      - task: lint
       - task: test
+
+  cargo:upgrade:
+    desc: "Upgrade Cargo.toml dependency requirements with cargo-edit"
+    cmds:
+      - cargo upgrade
+
+  cargo:upgrade:check:
+    desc: "Preview Cargo.toml dependency requirement upgrades"
+    cmds:
+      - cargo upgrade --dry-run
 
   # --- Run ---
   run:
@@ -78,47 +103,111 @@ tasks:
       - cargo install --path crates/kube-log-cli --force
 
   # --- Versioning ---
-  version:patch:
-    desc: "Bump patch version (0.1.0 -> 0.1.1)"
+  version:show:
+    desc: "Show current version"
+    cmds:
+      - echo "Current version $(tr -d '[:space:]' < VERSION)"
+
+  version:validate:
+    desc: "Validate VERSION file contains valid semver (X.Y.Z)"
+    internal: true
     cmds:
       - |
         set -e
-        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-        NEXT="$MAJOR.$MINOR.$((PATCH + 1))"
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        case "$VERSION" in
+          *[!0-9.]*|*.*.*.*|.*|*.) echo "ERROR: VERSION file contains invalid semver: '$VERSION'"; exit 1 ;;
+        esac
+        IFS='.' read -r MAJOR MINOR PATCH <<EOF
+        $VERSION
+        EOF
+        if [ -z "$MAJOR" ] || [ -z "$MINOR" ] || [ -z "$PATCH" ]; then
+          echo "ERROR: VERSION file contains invalid semver: '$VERSION'"
+          exit 1
+        fi
+
+  version:check:
+    desc: "Verify VERSION, Cargo.toml files, and Cargo.lock all agree"
+    cmds:
+      - task: version:validate
+      - |
+        set -e
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        OK=true
         for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
+          CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$f" | head -1)
+          if [ "$VERSION" != "$CARGO_VERSION" ]; then
+            echo "MISMATCH: VERSION=$VERSION but $f=$CARGO_VERSION"
+            OK=false
+          fi
         done
-        cargo generate-lockfile
-        echo "Bumped $CURRENT -> $NEXT"
+        for name in kube-log-core kube-log-tui kube-log-cli; do
+          LOCK_VERSION=$(awk -v name="$name" '$0 == "name = \"" name "\"" { getline; sub(/^version = \"/, ""); sub(/\"$/, ""); print; exit }' Cargo.lock)
+          if [ "$VERSION" != "$LOCK_VERSION" ]; then
+            echo "MISMATCH: VERSION=$VERSION but Cargo.lock $name=$LOCK_VERSION"
+            OK=false
+          fi
+        done
+        if [ "$OK" = true ]; then
+          echo "All files agree: $VERSION"
+        else
+          echo "Run 'task version:sync' to fix"
+          exit 1
+        fi
+
+  version:sync:
+    desc: "Sync Cargo.toml files and Cargo.lock to match VERSION file"
+    cmds:
+      - task: version:validate
+      - |
+        set -e
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
+          sed -i.bak "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" "$f"
+          rm -f "$f.bak"
+        done
+        cargo update --workspace
+        echo "All versions synced to $VERSION"
+
+  version:bump:
+    desc: "Bump VERSION by level and sync Cargo files"
+    internal: true
+    cmds:
+      - task: version:validate
+      - |
+        set -e
+        LEVEL="{{.LEVEL}}"
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        IFS='.' read -r MAJOR MINOR PATCH <<EOF
+        $VERSION
+        EOF
+        case "$LEVEL" in
+          patch) NEXT="$MAJOR.$MINOR.$((PATCH + 1))" ;;
+          minor) NEXT="$MAJOR.$((MINOR + 1)).0" ;;
+          major) NEXT="$((MAJOR + 1)).0.0" ;;
+          *) echo "Usage: task version:bump LEVEL=[patch|minor|major]"; exit 1 ;;
+        esac
+        printf '%s\n' "$NEXT" > VERSION
+        echo "Bumped VERSION to $NEXT"
+      - task: version:sync
+
+  version:patch:
+    desc: "Bump patch version (0.1.0 -> 0.1.1)"
+    cmds:
+      - task: version:bump
+        vars: { LEVEL: patch }
 
   version:minor:
     desc: "Bump minor version (0.1.0 -> 0.2.0)"
     cmds:
-      - |
-        set -e
-        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-        NEXT="$MAJOR.$((MINOR + 1)).0"
-        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
-        done
-        cargo generate-lockfile
-        echo "Bumped $CURRENT -> $NEXT"
+      - task: version:bump
+        vars: { LEVEL: minor }
 
   version:major:
     desc: "Bump major version (0.1.0 -> 1.0.0)"
     cmds:
-      - |
-        set -e
-        CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
-        IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-        NEXT="$((MAJOR + 1)).0.0"
-        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i "s/^version = \"$CURRENT\"/version = \"$NEXT\"/" "$f"
-        done
-        cargo generate-lockfile
-        echo "Bumped $CURRENT -> $NEXT"
+      - task: version:bump
+        vars: { LEVEL: major }
 
   version:tag:
     desc: "Git tag current version as v<version>"

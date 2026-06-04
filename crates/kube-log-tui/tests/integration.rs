@@ -347,6 +347,23 @@ fn test_log_stream_with_search_filter() {
     assert_eq!(app.filtered_log_lines().len(), 8);
 }
 
+#[test]
+fn test_log_line_strips_ansi_escape_codes_on_ingest() {
+    let (mut app, _rx) = test_app();
+
+    app.handle_app_event(AppEvent::LogLine(
+        "authhub".to_string(),
+        "2026-06-04 12:33:12 \x1b[2m2026-06-04T17:33:12.265355Z\x1b[0m \x1b[32m INFO\x1b[0m starting".to_string(),
+    ));
+
+    assert_eq!(app.log_lines.len(), 1);
+    assert_eq!(
+        app.log_lines[0].line,
+        "2026-06-04 12:33:12 2026-06-04T17:33:12.265355Z  INFO starting"
+    );
+    assert!(!app.log_lines[0].line.contains('\x1b'));
+}
+
 // ---------------------------------------------------------------------------
 // Log follow mode and scroll interaction
 // ---------------------------------------------------------------------------

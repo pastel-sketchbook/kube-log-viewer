@@ -19,10 +19,108 @@ use serde_json::Value;
 /// Covers K8s native format (`2024-01-15T10:00:00Z`, `…T10:00:00.123456789Z`)
 /// and common application formats (`2024-01-15 10:00:00`, `…10:00:00,123`).
 pub static TIMESTAMP_RE: LazyLock<Regex> = LazyLock::new(|| {
-    // Safety: this is a hardcoded literal that is guaranteed to compile.
+    // SAFETY: this is a hardcoded literal that is guaranteed to compile.
     Regex::new(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}([.,]\d+)?(Z|[+-]\d{2}:?\d{2})?\s*")
         .expect("hardcoded timestamp regex is valid")
 });
+
+// ---------------------------------------------------------------------------
+// ANSI escape handling
+// ---------------------------------------------------------------------------
+
+/// Strip ANSI terminal escape sequences from a log line.
+///
+/// Kubernetes preserves bytes written by the container. Applications using
+/// colored terminal loggers may emit SGR sequences such as `\x1b[32m`; ratatui
+/// renders text from spans and does not interpret those embedded controls.
+/// Some log viewers drop the ESC byte and leave visible fragments like `[32m`,
+/// so numeric orphaned SGR fragments are stripped as well.
+pub fn strip_ansi_escape_sequences(line: &str) -> Cow<'_, str> {
+    let bytes = line.as_bytes();
+    if !bytes.contains(&0x1b) && !contains_orphan_sgr_fragment(bytes) {
+        return Cow::Borrowed(line);
+    }
+
+    let mut out = String::with_capacity(line.len());
+    let mut last_emit = 0;
+    let mut i = 0;
+
+    while i < bytes.len() {
+        let end = if bytes[i] == 0x1b {
+            Some(ansi_sequence_end(bytes, i))
+        } else if bytes[i] == b'[' {
+            orphan_sgr_sequence_end(bytes, i)
+        } else {
+            None
+        };
+
+        let Some(end) = end else {
+            i += 1;
+            continue;
+        };
+
+        out.push_str(&line[last_emit..i]);
+        i = end;
+        last_emit = end;
+    }
+
+    out.push_str(&line[last_emit..]);
+    Cow::Owned(out)
+}
+
+fn contains_orphan_sgr_fragment(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .enumerate()
+        .any(|(i, byte)| *byte == b'[' && orphan_sgr_sequence_end(bytes, i).is_some())
+}
+
+fn ansi_sequence_end(bytes: &[u8], esc: usize) -> usize {
+    let Some(&kind) = bytes.get(esc + 1) else {
+        return bytes.len();
+    };
+
+    match kind {
+        b'[' => csi_sequence_end(bytes, esc + 2),
+        b']' => osc_sequence_end(bytes, esc + 2),
+        _ => (esc + 2).min(bytes.len()),
+    }
+}
+
+fn csi_sequence_end(bytes: &[u8], start: usize) -> usize {
+    for (offset, byte) in bytes[start..].iter().enumerate() {
+        if (0x40..=0x7e).contains(byte) {
+            return start + offset + 1;
+        }
+    }
+    bytes.len()
+}
+
+fn osc_sequence_end(bytes: &[u8], start: usize) -> usize {
+    let mut i = start;
+    while i < bytes.len() {
+        match bytes[i] {
+            0x07 => return i + 1,
+            0x1b if bytes.get(i + 1) == Some(&b'\\') => return i + 2,
+            _ => i += 1,
+        }
+    }
+    bytes.len()
+}
+
+fn orphan_sgr_sequence_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut i = start + 1;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'm' => return Some(i + 1),
+            b'0'..=b'9' | b';' => i += 1,
+            _ => return None,
+        }
+    }
+
+    None
+}
 
 // ---------------------------------------------------------------------------
 // JSON flattening
@@ -265,6 +363,56 @@ mod tests {
     fn test_parse_invalid_returns_none() {
         assert!(parse_log_timestamp("not-a-timestamp").is_none());
         assert!(parse_log_timestamp("").is_none());
+    }
+
+    // -- strip_ansi_escape_sequences ----------------------------------------
+
+    #[test]
+    fn test_strip_ansi_escape_sequences_removes_sgr_codes() {
+        let line = "2026-06-04 12:33:12 \x1b[2m2026-06-04T17:33:12.265355Z\x1b[0m \x1b[32m INFO\x1b[0m \x1b[2mra_spnego_auth_hub\x1b[0m: starting";
+        let result = strip_ansi_escape_sequences(line);
+
+        assert_eq!(
+            result.as_ref(),
+            "2026-06-04 12:33:12 2026-06-04T17:33:12.265355Z  INFO ra_spnego_auth_hub: starting"
+        );
+    }
+
+    #[test]
+    fn test_strip_ansi_escape_sequences_removes_orphan_sgr_fragments() {
+        let line = "2026-06-04 12:33:12 [2m2026-06-04T17:33:12.265355Z[0m [32m INFO[0m [2mra_spnego_auth_hub[0m: starting";
+        let result = strip_ansi_escape_sequences(line);
+
+        assert_eq!(
+            result.as_ref(),
+            "2026-06-04 12:33:12 2026-06-04T17:33:12.265355Z  INFO ra_spnego_auth_hub: starting"
+        );
+    }
+
+    #[test]
+    fn test_strip_ansi_escape_sequences_keeps_regular_bracketed_text() {
+        let line = "[authhub] request [id=123] completed";
+        let result = strip_ansi_escape_sequences(line);
+
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(result.as_ref(), line);
+    }
+
+    #[test]
+    fn test_strip_ansi_escape_sequences_borrows_plain_lines() {
+        let line = "2026-06-04T17:33:12Z INFO starting";
+        let result = strip_ansi_escape_sequences(line);
+
+        assert!(matches!(result, Cow::Borrowed(_)));
+        assert_eq!(result.as_ref(), line);
+    }
+
+    #[test]
+    fn test_strip_ansi_escape_sequences_removes_osc_codes() {
+        let line = "before \x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ after";
+        let result = strip_ansi_escape_sequences(line);
+
+        assert_eq!(result.as_ref(), "before link after");
     }
 
     // -- format_json_line ---------------------------------------------------

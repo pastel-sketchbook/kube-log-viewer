@@ -119,6 +119,8 @@ pub async fn watch_pods(
         let mut stream = stream;
 
         loop {
+            // Cancellation safety: the watcher stream and watch receiver are
+            // both re-polled each iteration; accumulated pod state is retained.
             tokio::select! {
                 result = cancel_rx.changed() => {
                     if result.is_err() || *cancel_rx.borrow() {

@@ -13,7 +13,7 @@ use crate::event::AppEvent;
 use crate::prefs;
 use crate::ui;
 use crate::ui::theme::{THEMES, Theme};
-use kube_log_core::k8s;
+use kube_log_core::{k8s, parse::strip_ansi_escape_sequences};
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -341,6 +341,9 @@ impl App {
                 .draw(|f| ui::render(f, &mut app))
                 .context("failed to render frame")?;
 
+            // Cancellation safety: each branch awaits event sources that are
+            // polled again on the next loop iteration; no branch owns partial
+            // state that must complete to keep the TUI consistent.
             tokio::select! {
                 maybe_event = event_stream.next() => {
                     match maybe_event {
@@ -849,7 +852,10 @@ impl App {
                 }
             }
             AppEvent::LogLine(source, line) => {
-                self.log_lines.push(TaggedLine { source, line });
+                self.log_lines.push(TaggedLine {
+                    source,
+                    line: strip_ansi_escape_sequences(&line).into_owned(),
+                });
                 // Note: no scroll offset update here — the render path
                 // computes the correct offset when follow_mode is true
                 // (total_lines - inner_height).  Calling filtered_log_lines()
@@ -1343,6 +1349,8 @@ impl App {
                 }
             };
 
+            // Cancellation safety: either the process wait completes or the
+            // cancellation branch kills the child; no partial output is used.
             tokio::select! {
                 wait_result = child.wait() => {
                     match wait_result {
