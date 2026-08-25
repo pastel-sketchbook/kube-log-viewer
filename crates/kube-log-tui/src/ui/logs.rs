@@ -10,6 +10,106 @@ use kube_log_core::parse::{
     TIMESTAMP_RE, format_json_line, parse_log_timestamp, strip_duplicate_timestamp,
 };
 
+/// Render the final paragraph widget with wrap-scrolling, zebra striping, and
+/// optional search bar. Shared by `render_single_or_merged` and `render_pane`.
+#[allow(clippy::too_many_arguments)]
+fn render_log_paragraph(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    title_spans: Vec<Span<'_>>,
+    border_color: Color,
+    theme: &Theme,
+    visible_lines: Vec<Line<'_>>,
+    inner_height: usize,
+    text_width: usize,
+    show_search: bool,
+) {
+    // When wrapping is on, logical lines expand to multiple visual lines.
+    // Calculate the overflow so we can scroll the Paragraph to keep the
+    // bottom (most recent) lines visible instead of clipping them.
+    let wrap_scroll_y = if app.wrap_lines {
+        if text_width > 0 {
+            let total_visual: usize = visible_lines
+                .iter()
+                .map(|l| {
+                    let w = l.width();
+                    if w == 0 { 1 } else { w.div_ceil(text_width) }
+                })
+                .sum();
+            total_visual
+                .saturating_sub(inner_height)
+                .min(u16::MAX as usize) as u16
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let zebra_rows = compute_zebra_rows(&visible_lines, text_width, app.wrap_lines, wrap_scroll_y);
+
+    let block = Block::default()
+        .title(Line::from(title_spans))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let mut paragraph = Paragraph::new(visible_lines).block(block);
+
+    if app.wrap_lines {
+        paragraph = paragraph.wrap(Wrap { trim: false });
+        if wrap_scroll_y > 0 {
+            paragraph = paragraph.scroll((wrap_scroll_y, 0));
+        }
+    }
+
+    frame.render_widget(paragraph, area);
+
+    apply_zebra_to_buffer(frame, area, &zebra_rows, theme.zebra_bg);
+
+    if show_search {
+        render_search_input(frame, app, area);
+    }
+}
+
+/// Render a centered italic hint inside a bordered block and return `true` to
+/// signal that the caller should `return` early (no log lines to show).
+///
+/// This is shared by `render_single_or_merged` and `render_pane` to avoid
+/// duplicating the "all lines filtered" empty-state widget.
+fn render_empty_hint(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    title_spans: Vec<Span<'_>>,
+    border_color: Color,
+    theme: &Theme,
+) {
+    let block = Block::default()
+        .title(Line::from(title_spans))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let hint = if app.hide_health_checks {
+        "All lines hidden by filters. Press H to show health checks."
+    } else if !app.search_query.is_empty() {
+        "No lines match the current search."
+    } else {
+        "All lines hidden by active filters."
+    };
+
+    let paragraph = Paragraph::new(Line::from(Span::styled(
+        hint,
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::ITALIC),
+    )))
+    .block(block)
+    .alignment(Alignment::Center);
+
+    frame.render_widget(paragraph, area);
+}
+
 /// Stream colors for multi-stream mode pod tags.
 const STREAM_COLORS: &[Color] = &[
     Color::Cyan,
@@ -83,29 +183,7 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
     // knows logs exist but are hidden by the active filter (e.g. health
     // check suppression).
     if total_lines == 0 && !app.log_lines.is_empty() {
-        let block = Block::default()
-            .title(Line::from(title_spans))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        let hint = if app.hide_health_checks {
-            "All lines hidden by filters. Press H to show health checks."
-        } else if !app.search_query.is_empty() {
-            "No lines match the current search."
-        } else {
-            "All lines hidden by active filters."
-        };
-
-        let paragraph = Paragraph::new(Line::from(Span::styled(
-            hint,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::ITALIC),
-        )))
-        .block(block)
-        .alignment(Alignment::Center);
-
-        frame.render_widget(paragraph, area);
+        render_empty_hint(frame, app, area, title_spans, border_color, theme);
         return;
     }
 
@@ -185,56 +263,19 @@ fn render_single_or_merged(frame: &mut Frame, app: &App, area: Rect) {
         })
         .collect();
 
-    // When wrapping is on, logical lines expand to multiple visual lines.
-    // Calculate the overflow so we can scroll the Paragraph to keep the
-    // bottom (most recent) lines visible instead of clipping them.
-    let wrap_scroll_y = if app.wrap_lines {
-        if text_width > 0 {
-            let total_visual: usize = visible_lines
-                .iter()
-                .map(|l| {
-                    let w = l.width();
-                    if w == 0 { 1 } else { w.div_ceil(text_width) }
-                })
-                .sum();
-            total_visual
-                .saturating_sub(inner_height)
-                .min(u16::MAX as usize) as u16
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-
-    // Build a map of visual row -> is_zebra before rendering.
-    // We apply zebra bg directly to the buffer after rendering so it
-    // covers the full row width regardless of wrapping.
-    let zebra_rows = compute_zebra_rows(&visible_lines, text_width, app.wrap_lines, wrap_scroll_y);
-
-    let block = Block::default()
-        .title(Line::from(title_spans))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let mut paragraph = Paragraph::new(visible_lines).block(block);
-
-    if app.wrap_lines {
-        paragraph = paragraph.wrap(Wrap { trim: false });
-        if wrap_scroll_y > 0 {
-            paragraph = paragraph.scroll((wrap_scroll_y, 0));
-        }
-    }
-
-    frame.render_widget(paragraph, area);
-
-    // Paint zebra background on the buffer for full-width striping.
-    apply_zebra_to_buffer(frame, area, &zebra_rows, theme.zebra_bg);
-
-    // Render search input bar when in search mode
-    if app.input_mode == InputMode::Search {
-        render_search_input(frame, app, area);
-    }
+    let show_search = app.input_mode == InputMode::Search;
+    render_log_paragraph(
+        frame,
+        app,
+        area,
+        title_spans,
+        border_color,
+        theme,
+        visible_lines,
+        inner_height,
+        text_width,
+        show_search,
+    );
 }
 
 fn render_split(frame: &mut Frame, app: &App, area: Rect) {
@@ -311,29 +352,7 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
         .iter()
         .any(|tl| tl.source.is_empty() || tl.source == handle.pod_name);
     if total_lines == 0 && has_raw_lines {
-        let block = Block::default()
-            .title(Line::from(title_spans))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        let hint = if app.hide_health_checks {
-            "All lines hidden by filters. Press H to show health checks."
-        } else if !app.search_query.is_empty() {
-            "No lines match the current search."
-        } else {
-            "All lines hidden by active filters."
-        };
-
-        let paragraph = Paragraph::new(Line::from(Span::styled(
-            hint,
-            Style::default()
-                .fg(theme.accent)
-                .add_modifier(Modifier::ITALIC),
-        )))
-        .block(block)
-        .alignment(Alignment::Center);
-
-        frame.render_widget(paragraph, area);
+        render_empty_hint(frame, app, area, title_spans, border_color, theme);
         return;
     }
 
@@ -381,51 +400,19 @@ fn render_pane(frame: &mut Frame, app: &App, area: Rect, pane_idx: usize) {
         })
         .collect();
 
-    // Same wrap-scroll adjustment as render_single_or_merged: keep bottom
-    // lines visible when wrapping causes visual overflow.
-    let wrap_scroll_y = if app.wrap_lines {
-        if text_width > 0 {
-            let total_visual: usize = visible_lines
-                .iter()
-                .map(|l| {
-                    let w = l.width();
-                    if w == 0 { 1 } else { w.div_ceil(text_width) }
-                })
-                .sum();
-            total_visual
-                .saturating_sub(inner_height)
-                .min(u16::MAX as usize) as u16
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-
-    let zebra_rows = compute_zebra_rows(&visible_lines, text_width, app.wrap_lines, wrap_scroll_y);
-
-    let block = Block::default()
-        .title(Line::from(title_spans))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
-
-    let mut paragraph = Paragraph::new(visible_lines).block(block);
-
-    if app.wrap_lines {
-        paragraph = paragraph.wrap(Wrap { trim: false });
-        if wrap_scroll_y > 0 {
-            paragraph = paragraph.scroll((wrap_scroll_y, 0));
-        }
-    }
-
-    frame.render_widget(paragraph, area);
-
-    apply_zebra_to_buffer(frame, area, &zebra_rows, theme.zebra_bg);
-
-    // Render search input in the active pane only
-    if is_active && app.input_mode == InputMode::Search {
-        render_search_input(frame, app, area);
-    }
+    let show_search = is_active && app.input_mode == InputMode::Search;
+    render_log_paragraph(
+        frame,
+        app,
+        area,
+        title_spans,
+        border_color,
+        theme,
+        visible_lines,
+        inner_height,
+        text_width,
+        show_search,
+    );
 }
 
 /// Compute which visual rows should have the zebra background.

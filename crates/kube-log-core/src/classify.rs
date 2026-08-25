@@ -338,44 +338,45 @@ fn is_warning_level(level: Option<&str>) -> bool {
     matches!(level, Some("WARN" | "WARNING"))
 }
 
-/// Check if the line indicates an error.
-fn is_error(upper: &str, original: &str) -> bool {
-    // Keyword match (uppercased)
-    for kw in ERROR_KEYWORDS {
+/// Check if the line matches any keywords (uppercased), patterns (case-sensitive),
+/// or an HTTP status regex with HTTP context.
+fn matches_level(
+    upper: &str,
+    original: &str,
+    keywords: &[&str],
+    patterns: &[&str],
+    http_re: &regex::Regex,
+) -> bool {
+    for kw in keywords {
         if upper.contains(kw) {
             return true;
         }
     }
-    // Pattern match (case-sensitive where needed)
-    for pat in ERROR_PATTERNS {
+    for pat in patterns {
         if original.contains(pat) {
             return true;
         }
     }
-    // HTTP 5xx (but not version numbers like AppleWebKit/537.36 — validated
-    // by has_real_http_status which rejects matches followed by ".<digit>").
-    if has_real_http_status(&HTTP_5XX_RE, original) && has_http_context(original) {
+    if has_real_http_status(http_re, original) && has_http_context(original) {
         return true;
     }
     false
 }
 
+/// Check if the line indicates an error.
+fn is_error(upper: &str, original: &str) -> bool {
+    matches_level(
+        upper,
+        original,
+        ERROR_KEYWORDS,
+        ERROR_PATTERNS,
+        &HTTP_5XX_RE,
+    )
+}
+
 /// Check if the line indicates a warning.
 fn is_warning(upper: &str, original: &str) -> bool {
-    for kw in WARN_KEYWORDS {
-        if upper.contains(kw) {
-            return true;
-        }
-    }
-    for pat in WARN_PATTERNS {
-        if original.contains(pat) {
-            return true;
-        }
-    }
-    if has_real_http_status(&HTTP_4XX_RE, original) && has_http_context(original) {
-        return true;
-    }
-    false
+    matches_level(upper, original, WARN_KEYWORDS, WARN_PATTERNS, &HTTP_4XX_RE)
 }
 
 /// Check if the 3-digit status code appears in an HTTP-like context.

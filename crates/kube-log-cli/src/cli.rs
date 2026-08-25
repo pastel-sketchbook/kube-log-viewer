@@ -248,9 +248,10 @@ pub enum FormatArg {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_filter_config_default_is_troubleshoot() {
-        let args = LogsArgs {
+    /// Build a `LogsArgs` with sensible defaults for tests.  Callers override
+    /// individual fields via struct-update syntax: `LogsArgs { all: true, ..default_logs_args() }`.
+    fn default_logs_args() -> LogsArgs {
+        LogsArgs {
             context: None,
             namespace: None,
             pod: vec![],
@@ -264,7 +265,12 @@ mod tests {
             verbose: false,
             include: None,
             format: FormatArg::Json,
-        };
+        }
+    }
+
+    #[test]
+    fn test_filter_config_default_is_troubleshoot() {
+        let args = default_logs_args();
         let cfg = args.filter_config();
         assert!(cfg.should_include(&kube_log_core::types::LineClass::Error));
         assert!(!cfg.should_include(&kube_log_core::types::LineClass::Normal));
@@ -274,19 +280,8 @@ mod tests {
     #[test]
     fn test_filter_config_all() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
             all: true,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         let cfg = args.filter_config();
         assert!(cfg.should_include(&kube_log_core::types::LineClass::HealthCheck));
@@ -296,19 +291,8 @@ mod tests {
     #[test]
     fn test_filter_config_verbose() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
-            all: false,
             verbose: true,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         let cfg = args.filter_config();
         assert!(cfg.should_include(&kube_log_core::types::LineClass::Normal));
@@ -318,19 +302,8 @@ mod tests {
     #[test]
     fn test_filter_config_custom_include() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
             include: Some("error,lifecycle".into()),
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         let cfg = args.filter_config();
         assert!(cfg.should_include(&kube_log_core::types::LineClass::Error));
@@ -341,19 +314,8 @@ mod tests {
     #[test]
     fn test_parse_time_range_minutes() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
             time_range: Some("15m".into()),
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         let dur = args.parse_time_range().unwrap().unwrap();
         assert_eq!(dur.as_secs() / 60, 15);
@@ -362,19 +324,8 @@ mod tests {
     #[test]
     fn test_parse_time_range_hours() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
             time_range: Some("6h".into()),
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         let dur = args.parse_time_range().unwrap().unwrap();
         assert_eq!(dur.as_secs() / 3600, 6);
@@ -382,101 +333,37 @@ mod tests {
 
     #[test]
     fn test_parse_time_range_none() {
-        let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
-        };
+        let args = default_logs_args();
         assert!(args.parse_time_range().unwrap().is_none());
     }
 
     #[test]
     fn test_parse_time_range_invalid_suffix() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
             time_range: Some("15x".into()),
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         assert!(args.parse_time_range().is_err());
     }
 
     #[test]
     fn test_output_format_default_is_json() {
-        let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
-        };
+        let args = default_logs_args();
         assert_eq!(args.output_format(), OutputFormat::Json);
     }
 
     #[test]
     fn test_output_format_jsonl() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
             format: FormatArg::Jsonl,
+            ..default_logs_args()
         };
         assert_eq!(args.output_format(), OutputFormat::Jsonl);
     }
 
     #[test]
     fn effective_tail_lines_defaults_to_1000_without_time_range() {
-        let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
-            time_range: None,
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
-        };
+        let args = default_logs_args();
         assert_eq!(args.effective_tail_lines(), Some(LogsArgs::DEFAULT_LINES));
         assert_eq!(
             args.effective_max_lines(),
@@ -487,19 +374,8 @@ mod tests {
     #[test]
     fn effective_tail_lines_none_when_time_range_set() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
-            lines: None,
-            follow: false,
             time_range: Some("3d".into()),
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         assert_eq!(args.effective_tail_lines(), None);
         assert_eq!(args.effective_max_lines(), None);
@@ -508,19 +384,9 @@ mod tests {
     #[test]
     fn explicit_lines_overrides_time_range() {
         let args = LogsArgs {
-            context: None,
-            namespace: None,
-            pod: vec![],
-            container: None,
             lines: Some(5000),
-            follow: false,
             time_range: Some("3d".into()),
-            search: None,
-            summary: false,
-            all: false,
-            verbose: false,
-            include: None,
-            format: FormatArg::Json,
+            ..default_logs_args()
         };
         assert_eq!(args.effective_tail_lines(), Some(5000));
         assert_eq!(args.effective_max_lines(), Some(5000));
