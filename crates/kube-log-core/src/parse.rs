@@ -256,7 +256,10 @@ pub fn parse_log_timestamp(ts: &str) -> Option<Timestamp> {
 
     for fmt in NAIVE_FMTS {
         if let Ok(dt) = civil::DateTime::strptime(fmt, &normalised) {
-            return dt.to_zoned(TimeZone::UTC).ok().map(|z| z.timestamp());
+            return dt
+                .to_zoned_datetime(TimeZone::UTC)
+                .ok()
+                .map(|z| z.timestamp());
         }
     }
 
@@ -304,7 +307,7 @@ mod tests {
     fn test_parse_rfc3339_offset() {
         let dt = parse_log_timestamp("2026-02-24T16:36:51+05:30").unwrap();
         // 16:36:51 +05:30 = 11:06:51 UTC
-        assert_eq!(dt.to_zoned(TimeZone::UTC).hour(), 11);
+        assert_eq!(dt.to_zoned_datetime(TimeZone::UTC).hour(), 11);
     }
 
     #[test]

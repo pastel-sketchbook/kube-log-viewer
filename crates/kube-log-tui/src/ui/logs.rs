@@ -481,7 +481,7 @@ fn render_search_input(frame: &mut Frame, app: &App, area: Rect) {
 
 /// Format a UTC timestamp as local time.
 fn format_local(ts: Timestamp) -> String {
-    let local = ts.to_zoned(TimeZone::system());
+    let local = ts.to_zoned_datetime(TimeZone::system());
     format!("{} ", local.strftime("%Y-%m-%d %H:%M:%S"))
 }
 

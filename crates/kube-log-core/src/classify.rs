@@ -314,11 +314,7 @@ pub fn is_health_check_line(raw: &str) -> bool {
 
     // 2. If the line is JSON, also inspect structured fields.
     let (_, _, fields) = extract_json_fields(raw);
-    if is_json_healthcheck(fields.as_ref()) {
-        return true;
-    }
-
-    false
+    is_json_healthcheck(fields.as_ref())
 }
 
 // ---------------------------------------------------------------------------
@@ -357,10 +353,7 @@ fn matches_level(
             return true;
         }
     }
-    if has_real_http_status(http_re, original) && has_http_context(original) {
-        return true;
-    }
-    false
+    has_real_http_status(http_re, original) && has_http_context(original)
 }
 
 /// Check if the line indicates an error.

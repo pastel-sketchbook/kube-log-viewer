@@ -1,4 +1,4 @@
-use jiff::Zoned;
+use jiff::ZonedDateTime;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 
@@ -137,7 +137,9 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(left), inner);
 
     // Right-aligned version & datetime
-    let now = Zoned::now().strftime("%Y-%m-%d %H:%M:%S").to_string();
+    let now = ZonedDateTime::now()
+        .strftime("%Y-%m-%d %H:%M:%S")
+        .to_string();
     let right = Line::from(vec![
         Span::styled(format!("v{VERSION}"), Style::default().fg(theme.muted)),
         Span::styled("  |  ", Style::default().fg(theme.muted)),

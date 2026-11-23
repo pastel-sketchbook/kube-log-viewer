@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers};
 use futures::StreamExt;
-use jiff::{SignedDuration, Timestamp, Zoned};
+use jiff::{SignedDuration, Timestamp, ZonedDateTime};
 use ratatui::prelude::*;
 use ratatui::widgets::ListState;
 use tokio::sync::{mpsc, watch};
@@ -1266,7 +1266,7 @@ impl App {
             context: self.current_context.clone(),
             namespace: self.current_namespace.clone(),
             pod_names,
-            exported_at: Zoned::now(),
+            exported_at: ZonedDateTime::now(),
         }
     }
 
@@ -1286,7 +1286,7 @@ impl App {
         let tx = self.tx.clone();
 
         let ext = format.extension();
-        let timestamp = Zoned::now().strftime("%Y%m%d-%H%M%S");
+        let timestamp = ZonedDateTime::now().strftime("%Y%m%d-%H%M%S");
         let filename = format!("kube-log-viewer-export-{timestamp}.{ext}");
         let path = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
@@ -1396,7 +1396,7 @@ pub struct ExportMetadata {
     pub context: String,
     pub namespace: String,
     pub pod_names: Vec<String>,
-    pub exported_at: Zoned,
+    pub exported_at: ZonedDateTime,
 }
 
 impl ExportMetadata {
@@ -2663,7 +2663,7 @@ mod tests {
             context: "k8s-cts-aks-d-kubesvc-1".to_string(),
             namespace: "production".to_string(),
             pod_names: vec!["web-abc123".to_string(), "api-def456".to_string()],
-            exported_at: Zoned::now(),
+            exported_at: ZonedDateTime::now(),
         };
         let header = meta.as_comment_lines();
         assert!(header.contains("# Context:   k8s-cts-aks-d-kubesvc-1"));
@@ -2691,7 +2691,7 @@ mod tests {
             context: "test-ctx".to_string(),
             namespace: "test-ns".to_string(),
             pod_names: vec!["pod-x".to_string()],
-            exported_at: Zoned::now(),
+            exported_at: ZonedDateTime::now(),
         };
         let lines = vec![
             ("pod-x".to_string(), "line one".to_string()),
@@ -2723,7 +2723,7 @@ mod tests {
             context: "ctx".to_string(),
             namespace: "ns".to_string(),
             pod_names: vec!["pod-a".to_string(), "pod-b".to_string()],
-            exported_at: Zoned::now(),
+            exported_at: ZonedDateTime::now(),
         };
         let lines = vec![
             ("pod-a".to_string(), "from a".to_string()),
@@ -2751,7 +2751,7 @@ mod tests {
             context: "ctx".to_string(),
             namespace: "ns".to_string(),
             pod_names: vec!["pod-x".to_string()],
-            exported_at: Zoned::now(),
+            exported_at: ZonedDateTime::now(),
         };
         let lines = vec![
             (
@@ -2794,7 +2794,7 @@ mod tests {
             context: "ctx".to_string(),
             namespace: "ns".to_string(),
             pod_names: vec!["pod-x".to_string()],
-            exported_at: Zoned::now(),
+            exported_at: ZonedDateTime::now(),
         };
         let lines = vec![
             (

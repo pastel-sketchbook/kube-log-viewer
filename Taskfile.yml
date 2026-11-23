@@ -127,17 +127,21 @@ tasks:
         fi
 
   version:check:
-    desc: "Verify VERSION, Cargo.toml files, and Cargo.lock all agree"
+    desc: "Verify VERSION, Cargo.toml, and Cargo.lock all agree"
     cmds:
       - task: version:validate
       - |
         set -e
         VERSION=$(tr -d '[:space:]' < VERSION)
         OK=true
+        CARGO_VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+        if [ "$VERSION" != "$CARGO_VERSION" ]; then
+          echo "MISMATCH: VERSION=$VERSION but Cargo.toml [workspace.package]=$CARGO_VERSION"
+          OK=false
+        fi
         for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          CARGO_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$f" | head -1)
-          if [ "$VERSION" != "$CARGO_VERSION" ]; then
-            echo "MISMATCH: VERSION=$VERSION but $f=$CARGO_VERSION"
+          if ! grep -q '^version\.workspace = true$' "$f"; then
+            echo "MISMATCH: $f does not inherit version.workspace = true"
             OK=false
           fi
         done
@@ -156,16 +160,14 @@ tasks:
         fi
 
   version:sync:
-    desc: "Sync Cargo.toml files and Cargo.lock to match VERSION file"
+    desc: "Sync Cargo.toml and Cargo.lock to match VERSION file"
     cmds:
       - task: version:validate
       - |
         set -e
         VERSION=$(tr -d '[:space:]' < VERSION)
-        for f in crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml; do
-          sed -i.bak "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" "$f"
-          rm -f "$f.bak"
-        done
+        sed -i.bak "/^\[workspace\.package\]/,/^\[/s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
+        rm -f Cargo.toml.bak
         cargo update --workspace
         echo "All versions synced to $VERSION"
 
@@ -214,7 +216,7 @@ tasks:
     cmds:
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
+        VERSION=$(tr -d '[:space:]' < VERSION)
         git tag "v$VERSION"
         echo "Tagged v$VERSION"
 
@@ -225,8 +227,8 @@ tasks:
       - task: version:patch
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
-        git add crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml Cargo.lock
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        git add VERSION Cargo.toml Cargo.lock
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
@@ -238,8 +240,8 @@ tasks:
       - task: version:minor
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
-        git add crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml Cargo.lock
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        git add VERSION Cargo.toml Cargo.lock
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
@@ -251,8 +253,8 @@ tasks:
       - task: version:major
       - |
         set -e
-        VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/kube-log-tui/Cargo.toml | head -1)
-        git add crates/kube-log-core/Cargo.toml crates/kube-log-tui/Cargo.toml crates/kube-log-cli/Cargo.toml Cargo.lock
+        VERSION=$(tr -d '[:space:]' < VERSION)
+        git add VERSION Cargo.toml Cargo.lock
         git commit -m "chore: bump version to $VERSION"
         git tag "v$VERSION"
         git push && git push origin "v$VERSION"
